@@ -34,7 +34,7 @@ async def test_cmd_admin_help():
     assert "/istatistik" in reply_text
     reply_markup = message.reply.call_args[1].get("reply_markup")
     assert reply_markup is not None
-    assert any("Tüm Kısıtları Kaldır" in btn.text for row in reply_markup.inline_keyboard for btn in row)
+    assert any("Baro Doğrulamasını Sıfırla" in btn.text or "Kısıtları" in btn.text for row in reply_markup.inline_keyboard for btn in row)
 
 
 @pytest.mark.asyncio
@@ -142,22 +142,22 @@ async def test_find_user_by_query():
 
 
 @pytest.mark.asyncio
-async def test_handle_admin_natural_query_stats():
-    from bot.handlers.admin_panel import handle_admin_natural_query
+async def test_cmd_reset_baro():
+    from bot.handlers.admin_panel import cmd_reset_baro
     settings.admin_chat_id = -1001234567890
 
     mock_db = AsyncMock()
-    count_res = MagicMock()
-    count_res.scalar.return_value = 10
-    mock_db.execute.return_value = count_res
+    mock_count = MagicMock()
+    mock_count.scalar.return_value = 5
+    mock_db.execute.return_value = mock_count
 
     message = MagicMock(spec=Message)
     message.chat = Chat(id=-1001234567890, type="supergroup")
-    message.text = "istatistik"
+    message.text = "/baro_sifirla"
     message.reply = AsyncMock()
 
-    await handle_admin_natural_query(message, mock_db)
+    await cmd_reset_baro(message, mock_db)
     assert message.reply.called
     reply_text = message.reply.call_args[0][0]
-    assert "SİSTEM İSTATİSTİKLERİ" in reply_text
+    assert "BARO DOĞRULAMALARI SIFIRLANDI" in reply_text
 

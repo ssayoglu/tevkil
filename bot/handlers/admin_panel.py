@@ -23,7 +23,11 @@ def is_admin_chat(message: Message) -> bool:
 def get_admin_main_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="🧹 Tüm Kısıtları Kaldır (Test Modu)", callback_data="adm_act:reset_all:0")
+            InlineKeyboardButton(text="🔄 Katılanları & Baro Doğrulamasını Sıfırla", callback_data="adm_act:reset_baro:0")
+        ],
+        [
+            InlineKeyboardButton(text="🧹 Tüm Kısıtları & Banları Kaldır", callback_data="adm_act:reset_restrictions:0"),
+            InlineKeyboardButton(text="💣 Tam Test Sıfırlama", callback_data="adm_act:reset_all:0")
         ],
         [
             InlineKeyboardButton(text="📋 Aktif Görüşmeler", callback_data="adm_act:view_active:0"),
@@ -35,21 +39,64 @@ def get_admin_main_keyboard() -> InlineKeyboardMarkup:
     ])
 
 
-async def reset_all_test_restrictions(db: AsyncSession) -> dict:
+async def reset_baro_verifications(db: AsyncSession, user_id: int = 0) -> int:
+    """Kullanıcıların veya belirli bir kullanıcının Baro doğrulamasını sıfırlar (Test için)."""
+    if user_id > 0:
+        stmt = update(User).where(User.id == user_id).values(
+            is_baro_verified=False,
+            baro_verification_status="NONE",
+            baro_name=None,
+            baro_sicil_no=None,
+            tbb_sicil_no=None,
+            baro_verified_at=None,
+            baro_document_file_id=None
+        )
+        res = await db.execute(stmt)
+        await db.commit()
+        return res.rowcount or 1
+    else:
+        verified_count = (await db.execute(select(func.count(User.id)).where(User.is_baro_verified == True))).scalar() or 0
+        await db.execute(
+            update(User).values(
+                is_baro_verified=False,
+                baro_verification_status="NONE",
+                baro_name=None,
+                baro_sicil_no=None,
+                tbb_sicil_no=None,
+                baro_verified_at=None,
+                baro_document_file_id=None
+            )
+        )
+        await db.commit()
+        return verified_count
+
+
+async def reset_all_test_restrictions(db: AsyncSession, reset_baro: bool = False) -> dict:
     """Test süresince tüm kullanıcı yasaklarını, ceza puanlarını ve aktif köprü oturumlarını sıfırlar."""
     banned_count = (await db.execute(select(func.count(User.id)).where(User.is_banned == True))).scalar() or 0
     penalized_count = (await db.execute(select(func.count(User.id)).where(User.penalty_points > 0))).scalar() or 0
     active_sessions_count = (await db.execute(select(func.count(BridgeSession.id)).where(BridgeSession.is_active == True))).scalar() or 0
 
-    await db.execute(
-        update(User).values(
-            is_banned=False,
-            banned_until=None,
-            ban_reason=None,
-            penalty_points=0,
-            rank_score=100
-        )
-    )
+    values = {
+        "is_banned": False,
+        "banned_until": None,
+        "ban_reason": None,
+        "penalty_points": 0,
+        "rank_score": 100
+    }
+
+    if reset_baro:
+        values.update({
+            "is_baro_verified": False,
+            "baro_verification_status": "NONE",
+            "baro_name": None,
+            "baro_sicil_no": None,
+            "tbb_sicil_no": None,
+            "baro_verified_at": None,
+            "baro_document_file_id": None
+        })
+
+    await db.execute(update(User).values(**values))
 
     await db.execute(
         update(BridgeSession).where(BridgeSession.is_active == True).values(
@@ -151,7 +198,9 @@ def render_test_commands_guide() -> str:
         "📜 <b>İlan Denetim ve Mesaj Logları:</b>\n"
         "• <code>#12 log</code>, <code>#12 nedir</code> veya <code>/log 12</code>\n"
         "  <i>İlanın tüm mesajlaşma geçmişini ve yetki belgelerini döker (3 ay saklanır).</i>\n\n"
-        "🧹 <b>Kısıtları ve Oturumları Sıfırlama:</b>\n"
+        "🧹 <b>Kısıtları ve Doğrulamaları Sıfırlama (Test):</b>\n"
+        "• <code>🔄 Katılanları & Baro Doğrulamasını Sıfırla</code> butonuna tıklayın veya <code>/baro_sifirla</code> yazın.\n"
+        "  <i>Gruba yeni katılanları ve baro doğrulamalarını sıfırlar; kullanıcılar tekrar unverified olur ve doğrulama akışını test edebilirsiniz.</i>\n"
         "• <code>/sifirla</code> veya <code>/tum_kisitlari_kaldir</code>\n"
         "  <i>Tüm kullanıcıların banlarını, ceza puanlarını sıfırlar, köprü oturumlarını temizler.</i>\n\n"
         "👥 <b>Kuyruk ve İlan Detayı:</b>\n"
@@ -163,7 +212,8 @@ def render_test_commands_guide() -> str:
         "• <code>/tarife_ban &lt;user_id&gt;</code> — Tarife altı teklif cezası (15 gün + 30 puan).\n"
         "• <code>/ceza_kaldir &lt;user_id&gt;</code> — Kısıtlamayı kaldırır.\n"
         "• <code>/ceza_puani_ver &lt;user_id&gt; &lt;puan&gt;</code> — Ceza puanı ekler.\n"
-        "• <code>/puan_ekle &lt;user_id&gt; &lt;puan&gt;</code> — Rank puanı ekler.\n\n"
+        "• <code>/puan_ekle &lt;user_id&gt; &lt;puan&gt;</code> — Rank puanı ekler.\n"
+        "• <code>/baro_sifirla [user_id]</code> — Kullanıcının veya herkesin baro doğrulamasını sıfırlar.\n\n"
         "📋 <b>Genel Listeler ve Durum:</b>\n"
         "• <code>/aktif_ilanlar</code> — Devam eden görüşmeler.\n"
         "• <code>/kara_liste</code> — Yasaklı kullanıcılar."
@@ -193,6 +243,8 @@ async def cmd_admin_help(message: Message):
         "  İlanın tüm mesaj ve denetim loglarını döker (Loglar 3 ay / 90 gün saklanır).\n\n"
         "• <code>!test</code> veya <code>/test</code>\n"
         "  Test süresince kullanabileceğiniz tüm test ve yönetim komutlarını listeler.\n\n"
+        "• <code>/baro_sifirla [user_id]</code> (veya <code>/katilanlari_sifirla</code>)\n"
+        "  Test amaçlı baro doğrulamalarını sıfırlar (katılanların doğrulama sihirbazını test etmek için).\n\n"
         "• <code>/tum_kisitlari_kaldir</code> (veya <code>/sifirla</code>)\n"
         "  Test modunda tüm kullanıcıların kısıtlamalarını ve aktif köprü oturumlarını anında sıfırlar.\n\n"
         "• <code>/durdur &lt;ilan_id&gt;</code>\n"
@@ -222,7 +274,7 @@ async def cmd_reset_all_test_restrictions(message: Message, db: AsyncSession):
     if not is_admin_chat(message):
         return
 
-    res = await reset_all_test_restrictions(db)
+    res = await reset_all_test_restrictions(db, reset_baro=False)
     summary = (
         "🧹 <b>TEST MODU: TÜM KISITLAR VE OTURUMLAR SIFIRLANDI</b>\n\n"
         f"• <b>Yasağı Kaldırılan Kullanıcı:</b> {res['banned_count']}\n"
@@ -232,6 +284,32 @@ async def cmd_reset_all_test_restrictions(message: Message, db: AsyncSession):
         "• <b>Tüm Kullanıcı Güven Skorları:</b> ⭐ 100 (Varsayılan) yapıldı.\n\n"
         "<i>Tüm test kullanıcıları artık gruplarda serbestçe mesaj atabilir ve yeni ilana başvurabilir.</i>"
     )
+    await message.reply(summary, reply_markup=get_admin_main_keyboard(), parse_mode="HTML")
+
+
+@router.message(Command("baro_sifirla", "katilanlari_sifirla", "uyeleri_sifirla", "dogrulamalari_sifirla", prefix="/!"))
+async def cmd_reset_baro(message: Message, db: AsyncSession):
+    if not is_admin_chat(message):
+        return
+
+    parts = message.text.split()
+    target_uid = int(parts[1]) if len(parts) >= 2 and parts[1].isdigit() else 0
+
+    count = await reset_baro_verifications(db, user_id=target_uid)
+    if target_uid > 0:
+        summary = (
+            f"🔄 <b>TEST MODU: KULLANICI BARO DOĞRULAMASI SIFIRLANDI</b>\n\n"
+            f"• <b>Kullanıcı ID:</b> <code>{target_uid}</code>\n"
+            f"• <b>Durum:</b> Doğrulanmamış (Unverified) yapıldı ❌\n\n"
+            f"<i>Bu kullanıcı grupta mesaj gönderdiğinde veya katıldığında doğrulama butonuyla karşılaşacaktır.</i>"
+        )
+    else:
+        summary = (
+            f"🔄 <b>TEST MODU: TÜM KATILANLAR VE BARO DOĞRULAMALARI SIFIRLANDI</b>\n\n"
+            f"• <b>Sıfırlanan Doğrulama Sayısı:</b> {count} Kullanıcı\n"
+            f"• <b>Durum:</b> Tüm üyeler 'Doğrulanmamış' (Unverified) statüsüne çekildi ❌\n\n"
+            f"<i>Artık grupta mesaj atan veya yeni katılan tüm kullanıcılar doğrulama kısıtına girecektir. Rahatça test edebilirsiniz.</i>"
+        )
     await message.reply(summary, reply_markup=get_admin_main_keyboard(), parse_mode="HTML")
 
 
@@ -812,28 +890,32 @@ async def render_listing_logs_dossier(listing_id: int, db: AsyncSession):
     return dossier_text, InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-def build_user_admin_keyboard(user_id: int, is_banned: bool = False) -> InlineKeyboardMarkup:
+def build_user_admin_keyboard(user_id: int, is_banned: bool = False, is_baro_verified: bool = False) -> InlineKeyboardMarkup:
+    buttons = []
     if is_banned:
-        buttons = [
-            [
-                InlineKeyboardButton(text="✅ Kısıtlamayı Kaldır", callback_data=f"adm_act:unban:{user_id}")
-            ],
-            [
-                InlineKeyboardButton(text="⚠️ +10 Ceza Puanı", callback_data=f"adm_act:penalty:{user_id}:10"),
-                InlineKeyboardButton(text="⭐ +5 Rank Puanı", callback_data=f"adm_act:rank:{user_id}:5")
-            ]
-        ]
+        buttons.append([
+            InlineKeyboardButton(text="✅ Kısıtlamayı Kaldır", callback_data=f"adm_act:unban:{user_id}")
+        ])
     else:
-        buttons = [
-            [
-                InlineKeyboardButton(text="⛔ 5 Gün Uzaklaştır", callback_data=f"adm_act:ban:{user_id}:5"),
-                InlineKeyboardButton(text="🚨 15 Gün (Tarife Cezası)", callback_data=f"adm_act:ban:{user_id}:15")
-            ],
-            [
-                InlineKeyboardButton(text="⚠️ +10 Ceza Puanı", callback_data=f"adm_act:penalty:{user_id}:10"),
-                InlineKeyboardButton(text="⭐ +5 Rank Puanı", callback_data=f"adm_act:rank:{user_id}:5")
-            ]
-        ]
+        buttons.append([
+            InlineKeyboardButton(text="⛔ 5 Gün Uzaklaştır", callback_data=f"adm_act:ban:{user_id}:5"),
+            InlineKeyboardButton(text="🚨 15 Gün (Tarife Cezası)", callback_data=f"adm_act:ban:{user_id}:15")
+        ])
+
+    buttons.append([
+        InlineKeyboardButton(text="⚠️ +10 Ceza Puanı", callback_data=f"adm_act:penalty:{user_id}:10"),
+        InlineKeyboardButton(text="⭐ +5 Rank Puanı", callback_data=f"adm_act:rank:{user_id}:5")
+    ])
+
+    if is_baro_verified:
+        buttons.append([
+            InlineKeyboardButton(text="🔄 Baro Doğrulamasını Sıfırla (Test)", callback_data=f"adm_act:reset_user_baro:{user_id}")
+        ])
+    else:
+        buttons.append([
+            InlineKeyboardButton(text="🎖️ Baro Doğrula (Hızlı Onay)", callback_data=f"adm_act:approve_baro:{user_id}")
+        ])
+
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
@@ -848,18 +930,51 @@ async def handle_admin_action_callback(callback: CallbackQuery, db: AsyncSession
     target_uid = int(parts[2]) if len(parts) >= 3 and parts[2].isdigit() else 0
     val = int(parts[3]) if len(parts) >= 4 and parts[3].isdigit() else 0
 
-    if action == "reset_all":
-        res = await reset_all_test_restrictions(db)
+    if action == "reset_baro":
+        count = await reset_baro_verifications(db)
         summary = (
-            "🧹 <b>TEST MODU: TÜM KISITLAR VE OTURUMLAR SIFIRLANDI</b>\n\n"
+            f"🔄 <b>TEST MODU: TÜM KATILANLAR VE BARO DOĞRULAMALARI SIFIRLANDI</b>\n\n"
+            f"• <b>Sıfırlanan Doğrulama Sayısı:</b> {count} Kullanıcı\n"
+            f"• <b>Durum:</b> Tüm üyeler 'Doğrulanmamış' (Unverified) statüsüne çekildi ❌\n\n"
+            f"<i>Artık grupta mesaj atan veya yeni katılan tüm kullanıcılar doğrulama kısıtına girecektir. Katılım ve doğrulama akışını sıfırdan test edebilirsiniz.</i>"
+        )
+        await callback.answer(f"🔄 {count} kullanıcının baro kaydı sıfırlandı!", show_alert=True)
+        try:
+            await callback.message.reply(summary, reply_markup=get_admin_main_keyboard(), parse_mode="HTML")
+        except Exception:
+            await callback.message.edit_text(summary, reply_markup=get_admin_main_keyboard(), parse_mode="HTML")
+        return
+
+    elif action == "reset_restrictions":
+        res = await reset_all_test_restrictions(db, reset_baro=False)
+        summary = (
+            "🧹 <b>TEST MODU: KISITLAR VE BANLAR SIFIRLANDI</b>\n\n"
             f"• <b>Yasağı Kaldırılan Kullanıcı:</b> {res['banned_count']}\n"
             f"• <b>Ceza Puanı Sıfırlanan:</b> {res['penalized_count']}\n"
             f"• <b>Kapatılan Aktif Görüşme:</b> {res['active_sessions_count']}\n"
             "• <b>Redis Köprü Oturumları:</b> Temizlendi ✅\n"
-            "• <b>Tüm Kullanıcı Güven Skorları:</b> ⭐ 100 (Varsayılan) yapıldı.\n\n"
-            "<i>Tüm test kullanıcıları artık gruplarda serbestçe mesaj atabilir ve yeni ilana başvurabilir.</i>"
+            "• <b>Tüm Kullanıcı Güven Skorları:</b> ⭐ 100 (Varsayılan) yapıldı."
         )
         await callback.answer("🧹 Tüm kısıtlamalar başarıyla sıfırlandı!", show_alert=True)
+        try:
+            await callback.message.reply(summary, reply_markup=get_admin_main_keyboard(), parse_mode="HTML")
+        except Exception:
+            await callback.message.edit_text(summary, reply_markup=get_admin_main_keyboard(), parse_mode="HTML")
+        return
+
+    elif action == "reset_all":
+        res = await reset_all_test_restrictions(db, reset_baro=True)
+        summary = (
+            "💣 <b>TEST MODU: TAM SİSTEM VE DOĞRULAMA SIFIRLANDI</b>\n\n"
+            f"• <b>Yasağı Kaldırılan Kullanıcı:</b> {res['banned_count']}\n"
+            f"• <b>Ceza Puanı Sıfırlanan:</b> {res['penalized_count']}\n"
+            f"• <b>Kapatılan Aktif Görüşme:</b> {res['active_sessions_count']}\n"
+            "• <b>Baro Doğrulamaları:</b> Tümü Sıfırlandı (Unverified) ❌\n"
+            "• <b>Redis Köprü Oturumları:</b> Temizlendi ✅\n"
+            "• <b>Tüm Kullanıcı Güven Skorları:</b> ⭐ 100 (Varsayılan) yapıldı.\n\n"
+            "<i>Sistem tamamen sıfırdan test edilmeye hazırdır.</i>"
+        )
+        await callback.answer("💣 Sistem ve doğrulamalar tamamen sıfırlandı!", show_alert=True)
         try:
             await callback.message.reply(summary, reply_markup=get_admin_main_keyboard(), parse_mode="HTML")
         except Exception:
@@ -957,6 +1072,20 @@ async def handle_admin_action_callback(callback: CallbackQuery, db: AsyncSession
             pass
         return
 
+    elif action == "reset_user_baro":
+        await reset_baro_verifications(db, user_id=target_uid)
+        await callback.answer(f"🔄 Kullanıcı {target_uid} baro kaydı sıfırlandı!", show_alert=True)
+        u_stmt = select(User).where(User.id == target_uid)
+        user = (await db.execute(u_stmt)).scalar_one_or_none()
+        if user:
+            new_dossier = await render_user_profile_dossier(user, db)
+            new_kb = build_user_admin_keyboard(user.id, is_banned=user.is_banned, is_baro_verified=user.is_baro_verified)
+            try:
+                await callback.message.edit_text(new_dossier, reply_markup=new_kb, parse_mode="HTML")
+            except Exception:
+                pass
+        return
+
     u_stmt = select(User).where(User.id == target_uid)
     res = await db.execute(u_stmt)
     user = res.scalar_one_or_none()
@@ -968,7 +1097,7 @@ async def handle_admin_action_callback(callback: CallbackQuery, db: AsyncSession
     if action == "whois":
         await callback.answer()
         dossier = await render_user_profile_dossier(user, db)
-        kb = build_user_admin_keyboard(user.id, is_banned=user.is_banned)
+        kb = build_user_admin_keyboard(user.id, is_banned=user.is_banned, is_baro_verified=user.is_baro_verified)
         await callback.message.reply(dossier, reply_markup=kb, parse_mode="HTML")
         return
 
@@ -1044,7 +1173,7 @@ async def handle_admin_action_callback(callback: CallbackQuery, db: AsyncSession
     # İlgili mesaj bir dosya kartı ise kartı güncelleyelim
     try:
         new_dossier = await render_user_profile_dossier(user, db)
-        new_kb = build_user_admin_keyboard(user.id, is_banned=user.is_banned)
+        new_kb = build_user_admin_keyboard(user.id, is_banned=user.is_banned, is_baro_verified=user.is_baro_verified)
         await callback.message.edit_text(new_dossier, reply_markup=new_kb, parse_mode="HTML")
     except Exception:
         pass
@@ -1090,7 +1219,7 @@ async def cmd_user_info(message: Message, db: AsyncSession):
         return
 
     dossier = await render_user_profile_dossier(user, db)
-    kb = build_user_admin_keyboard(user.id, is_banned=user.is_banned)
+    kb = build_user_admin_keyboard(user.id, is_banned=user.is_banned, is_baro_verified=user.is_baro_verified)
     await message.reply(dossier, reply_markup=kb, parse_mode="HTML")
 
 
@@ -1153,6 +1282,32 @@ async def handle_admin_natural_query(message: Message, db: AsyncSession):
     if re.search(r"^(?:!test|/test|test\s+komutlar[ıi]|test\s+rehberi|test\s+menüsü)\b", text, re.IGNORECASE):
         guide = render_test_commands_guide()
         await message.reply(guide, reply_markup=get_admin_main_keyboard(), parse_mode="HTML")
+        return
+
+    # 0.1 Doğal Sıfırlama Sorguları (Örn: "baro sıfırla", "katılanları sıfırla", "üyeleri sıfırla", "doğrulamaları sıfırla")
+    if re.search(r"^(?:baro|kat[ıi]lanlar[ıi]|üyeler[ıi]|do[gğ]rulamalar[ıi])\s+s[ıi]f[ıi]rla\b", text, re.IGNORECASE) or re.search(r"^s[ıi]f[ıi]rla\s+(?:baro|kat[ıi]lanlar[ıi]|üyeler[ıi]|do[gğ]rulamalar[ıi])\b", text, re.IGNORECASE):
+        count = await reset_baro_verifications(db)
+        summary = (
+            f"🔄 <b>TEST MODU: TÜM KATILANLAR VE BARO DOĞRULAMALARI SIFIRLANDI</b>\n\n"
+            f"• <b>Sıfırlanan Doğrulama Sayısı:</b> {count} Kullanıcı\n"
+            f"• <b>Durum:</b> Tüm üyeler 'Doğrulanmamış' (Unverified) statüsüne çekildi ❌\n\n"
+            f"<i>Artık grupta mesaj atan veya yeni katılan tüm kullanıcılar doğrulama kısıtına girecektir. Katılım ve doğrulama akışını sıfırdan test edebilirsiniz.</i>"
+        )
+        await message.reply(summary, reply_markup=get_admin_main_keyboard(), parse_mode="HTML")
+        return
+
+    # 0.2 "kısıtları kaldır", "kısıtları sıfırla", "tüm kısıtları kaldır", "test sıfırla", "sıfırla"
+    if re.search(r"^(?:k[ıi]s[ıi]tlar[ıi]\s+(?:kald[ıi]r|s[ıi]f[ıi]rla)|tüm\s+k[ıi]s[ıi]tlar[ıi]\s+kald[ıi]r|test\s+s[ıi]f[ıi]rla|s[ıi]f[ıi]rla)$", text, re.IGNORECASE):
+        res = await reset_all_test_restrictions(db, reset_baro=False)
+        summary = (
+            "🧹 <b>TEST MODU: KISITLAR VE BANLAR SIFIRLANDI</b>\n\n"
+            f"• <b>Yasağı Kaldırılan Kullanıcı:</b> {res['banned_count']}\n"
+            f"• <b>Ceza Puanı Sıfırlanan:</b> {res['penalized_count']}\n"
+            f"• <b>Kapatılan Aktif Görüşme:</b> {res['active_sessions_count']}\n"
+            "• <b>Redis Köprü Oturumları:</b> Temizlendi ✅\n"
+            "• <b>Tüm Kullanıcı Güven Skorları:</b> ⭐ 100 (Varsayılan) yapıldı."
+        )
+        await message.reply(summary, reply_markup=get_admin_main_keyboard(), parse_mode="HTML")
         return
 
     # 1. İstatistik Sorguları (Örn: "istatistik", "istatistikler", "stats", "rapor", "durum")
@@ -1268,7 +1423,7 @@ async def handle_admin_natural_query(message: Message, db: AsyncSession):
         return
 
     dossier = await render_user_profile_dossier(user, db)
-    kb = build_user_admin_keyboard(user.id, is_banned=user.is_banned)
+    kb = build_user_admin_keyboard(user.id, is_banned=user.is_banned, is_baro_verified=user.is_baro_verified)
     await message.reply(dossier, reply_markup=kb, parse_mode="HTML")
 
 

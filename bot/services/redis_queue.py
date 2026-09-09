@@ -4,7 +4,22 @@ from typing import List, Tuple, Optional, Dict, Any
 import redis.asyncio as aioredis
 from bot.config import settings
 
-redis_client = aioredis.from_url(settings.redis_url, decode_responses=True)
+_redis_client: Optional[aioredis.Redis] = None
+
+
+def get_redis_client() -> aioredis.Redis:
+    global _redis_client
+    if _redis_client is None:
+        _redis_client = aioredis.from_url(settings.redis_url, decode_responses=True)
+    return _redis_client
+
+
+class _RedisProxy:
+    def __getattr__(self, name):
+        return getattr(get_redis_client(), name)
+
+
+redis_client = _RedisProxy()
 
 
 class RedisQueueService:
