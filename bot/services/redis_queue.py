@@ -118,6 +118,16 @@ class RedisQueueService:
         await redis_client.delete(key)
 
     @staticmethod
+    async def flush_all_active_bridges():
+        """Tüm aktif köprü oturumu redis anahtarlarını temizler."""
+        try:
+            keys = await redis_client.keys("active_bridge:*")
+            if keys:
+                await redis_client.delete(*keys)
+        except Exception:
+            pass
+
+    @staticmethod
     async def acquire_update_lock(listing_id: int, timeout_sec: float = 1.0) -> bool:
         """
         Telegram rate limit koruması için grup mesaj güncelleme kilidi.

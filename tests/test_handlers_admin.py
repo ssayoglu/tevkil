@@ -32,3 +32,9 @@ async def test_cmd_admin_help():
     assert "/kullanici_kisitla" in reply_text
     assert "/ceza_puani_ver" in reply_text
     assert "/istatistik" in reply_text
+    assert "/tum_kisitlari_kaldir" in reply_text
+
+    # Verify inline keyboard is attached
+    reply_markup = message.reply.call_args[1].get("reply_markup")
+    assert reply_markup is not None
+    assert any("Tüm Kısıtları Kaldır" in btn.text for row in reply_markup.inline_keyboard for btn in row)

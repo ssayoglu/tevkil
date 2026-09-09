@@ -4,7 +4,7 @@ from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.filters import Command
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select, func, update
 from bot.config import settings
 from bot.database.models import User, Listing, BridgeSession, Application, MessageLog, PenaltyLog
 from bot.services.redis_queue import RedisQueueService
@@ -20,6 +20,122 @@ def is_admin_chat(message: Message) -> bool:
     return message.chat.id == settings.admin_chat_id
 
 
+def get_admin_main_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="🧹 Tüm Kısıtları Kaldır (Test Modu)", callback_data="adm_act:reset_all:0")
+        ],
+        [
+            InlineKeyboardButton(text="📋 Aktif Görüşmeler", callback_data="adm_act:view_active:0"),
+            InlineKeyboardButton(text="🔒 Kara Liste", callback_data="adm_act:view_blacklist:0")
+        ],
+        [
+            InlineKeyboardButton(text="📊 Sistem İstatistikleri", callback_data="adm_act:view_stats:0")
+        ]
+    ])
+
+
+async def reset_all_test_restrictions(db: AsyncSession) -> dict:
+    """Test süresince tüm kullanıcı yasaklarını, ceza puanlarını ve aktif köprü oturumlarını sıfırlar."""
+    banned_count = (await db.execute(select(func.count(User.id)).where(User.is_banned == True))).scalar() or 0
+    penalized_count = (await db.execute(select(func.count(User.id)).where(User.penalty_points > 0))).scalar() or 0
+    active_sessions_count = (await db.execute(select(func.count(BridgeSession.id)).where(BridgeSession.is_active == True))).scalar() or 0
+
+    await db.execute(
+        update(User).values(
+            is_banned=False,
+            banned_until=None,
+            ban_reason=None,
+            penalty_points=0,
+            rank_score=100
+        )
+    )
+
+    await db.execute(
+        update(BridgeSession).where(BridgeSession.is_active == True).values(
+            is_active=False,
+            closed_at=datetime.utcnow(),
+            close_reason="ADMIN_TEST_RESET"
+        )
+    )
+
+    await db.commit()
+    await RedisQueueService.flush_all_active_bridges()
+
+    return {
+        "banned_count": banned_count,
+        "penalized_count": penalized_count,
+        "active_sessions_count": active_sessions_count
+    }
+
+
+async def get_stats_text(db: AsyncSession) -> str:
+    total_users = (await db.execute(select(func.count(User.id)))).scalar() or 0
+    total_listings = (await db.execute(select(func.count(Listing.id)))).scalar() or 0
+    completed_listings = (await db.execute(select(func.count(Listing.id)).where(Listing.status == "COMPLETED"))).scalar() or 0
+    timeout_cancelled = (await db.execute(select(func.count(Listing.id)).where(Listing.status == "CANCELLED_TIMEOUT"))).scalar() or 0
+    active_sessions = (await db.execute(select(func.count(BridgeSession.id)).where(BridgeSession.is_active == True))).scalar() or 0
+    total_logs = (await db.execute(select(func.count(MessageLog.id)))).scalar() or 0
+    now = datetime.utcnow()
+    banned_count = (await db.execute(select(func.count(User.id)).where(User.is_banned == True, User.banned_until > now))).scalar() or 0
+    avg_score = await RankService.get_system_average_score(db)
+
+    return (
+        "📊 <b>TEVKİL BOTU SİSTEM İSTATİSTİKLERİ</b>\n\n"
+        f"👥 <b>Kullanıcılar:</b>\n"
+        f"• Toplam Kayıtlı Kullanıcı: <b>{total_users}</b>\n"
+        f"• Sistem Ortalama Rank Skoru: ⭐ <b>{avg_score:.1f}</b>\n"
+        f"• Aktif Kısıtlı Kullanıcı Sayısı: <b>{banned_count}</b>\n\n"
+        f"📋 <b>İlanlar ve Süreçler:</b>\n"
+        f"• Toplam Açılan İlan: <b>{total_listings}</b>\n"
+        f"• Başarıyla Tamamlanan Tevkil: <b>{completed_listings}</b>\n"
+        f"• 30 Dk Zaman Aşımıyla İptal: <b>{timeout_cancelled}</b>\n"
+        f"• Devam Eden Aktif Görüşme: <b>{active_sessions}</b>\n\n"
+        f"🛡️ <b>Denetim Grubu:</b>\n"
+        f"• Toplam Arşivlenen Mesaj/Dosya: <b>{total_logs}</b>"
+    )
+
+
+async def get_blacklist_text(db: AsyncSession) -> str:
+    now = datetime.utcnow()
+    stmt = select(User).where(User.is_banned == True, User.banned_until > now).order_by(User.banned_until.asc())
+    res = await db.execute(stmt)
+    banned_users = res.scalars().all()
+
+    if not banned_users:
+        return "ℹ️ Şu anda aktif kısıtlı (yasaklı) kullanıcı bulunmamaktadır."
+
+    lines = [f"🔒 <b>Aktif Kısıtlı Kullanıcılar ({len(banned_users)} Kişi):</b>\n"]
+    for u in banned_users:
+        lines.append(
+            f"• <b>{u.full_name}</b> (<code>{u.id}</code>)\n"
+            f"  Bitiş: {format_date_short_tr(u.banned_until)}\n"
+            f"  Sebep: <i>{u.ban_reason}</i>\n"
+            f"  Cezayı Kaldır: <code>/ceza_kaldir {u.id}</code>\n"
+        )
+    return "\n".join(lines)
+
+
+async def get_active_sessions_text(db: AsyncSession) -> str:
+    stmt = select(BridgeSession).where(BridgeSession.is_active == True)
+    res = await db.execute(stmt)
+    sessions = res.scalars().all()
+
+    if not sessions:
+        return "ℹ️ Şu anda devam eden aktif bir tevkil görüşmesi bulunmamaktadır."
+
+    lines = ["📋 <b>Devam Eden Aktif Görüşmeler:</b>\n"]
+    for s in sessions:
+        lines.append(
+            f"• <b>İlan #{s.listing_id}</b> | Başlangıç: {s.started_at.strftime('%H:%M:%S')}\n"
+            f"  İlan Sahibi: <code>{s.creator_id}</code>\n"
+            f"  Aday: <code>{s.applicant_id}</code> ({s.candidate_rank}. Sıra)\n"
+            f"  İlk Mesaj Gönderildi mi: {'Evet ✅' if s.creator_first_message_sent else 'Hayır ⏳'}\n"
+            f"  Durdurmak için: <code>/durdur {s.listing_id}</code>\n"
+        )
+    return "\n".join(lines)
+
+
 @router.message(Command("admin_yardim", "admin_help"))
 async def cmd_admin_help(message: Message):
     if not is_admin_chat(message):
@@ -27,6 +143,8 @@ async def cmd_admin_help(message: Message):
 
     text = (
         "🛠️ <b>ADMİN DENETİM PANELİ KOMUTLARI</b>\n\n"
+        "• <code>/tum_kisitlari_kaldir</code> (veya <code>/sifirla</code>)\n"
+        "  Test modunda tüm kullanıcıların kısıtlamalarını ve aktif köprü oturumlarını anında sıfırlar.\n\n"
         "• <code>/durdur &lt;ilan_id&gt;</code>\n"
         "  Devam eden bir köprü görüşmesini anında keser ve oturumu kapatır.\n\n"
         "• <code>/kullanici_kisitla &lt;user_id&gt; [gün] [sebep]</code>\n"
@@ -39,7 +157,7 @@ async def cmd_admin_help(message: Message):
         "  Kullanıcıya ceza puanı işler (sıra handikapını artırır).\n\n"
         "• <code>/puan_ekle &lt;user_id&gt; &lt;puan&gt;</code>\n"
         "  Kullanıcının rank puanını artırır.\n\n"
-        "• <code>/kullanici_bilgi &lt;user_id&gt;</code>\n"
+        "• <code>/kullanici_bilgi &lt;user_id&gt;</code> veya <code>@kullanici kimdir</code>\n"
         "  Kullanıcının rank, ceza, kısıtlama ve tevkil geçmişini gösterir.\n\n"
         "• <code>/ilan_detay &lt;ilan_id&gt;</code>\n"
         "  İlanın tüm başvuru kuyruğunu ve denetim özetini gösterir.\n\n"
@@ -50,7 +168,25 @@ async def cmd_admin_help(message: Message):
         "• <code>/istatistik</code>\n"
         "  Sistem geneli toplam ve günlük tevkil istatistiklerini raporlar."
     )
-    await message.reply(text, parse_mode="HTML")
+    await message.reply(text, reply_markup=get_admin_main_keyboard(), parse_mode="HTML")
+
+
+@router.message(Command("tum_kisitlari_kaldir", "sifirla", "test_sifirla", "reset_all"))
+async def cmd_reset_all_test_restrictions(message: Message, db: AsyncSession):
+    if not is_admin_chat(message):
+        return
+
+    res = await reset_all_test_restrictions(db)
+    summary = (
+        "🧹 <b>TEST MODU: TÜM KISITLAR VE OTURUMLAR SIFIRLANDI</b>\n\n"
+        f"• <b>Yasağı Kaldırılan Kullanıcı:</b> {res['banned_count']}\n"
+        f"• <b>Ceza Puanı Sıfırlanan:</b> {res['penalized_count']}\n"
+        f"• <b>Kapatılan Aktif Görüşme:</b> {res['active_sessions_count']}\n"
+        "• <b>Redis Köprü Oturumları:</b> Temizlendi ✅\n"
+        "• <b>Tüm Kullanıcı Güven Skorları:</b> ⭐ 100 (Varsayılan) yapıldı.\n\n"
+        "<i>Tüm test kullanıcıları artık gruplarda serbestçe mesaj atabilir ve yeni ilana başvurabilir.</i>"
+    )
+    await message.reply(summary, reply_markup=get_admin_main_keyboard(), parse_mode="HTML")
 
 
 @router.message(Command("durdur"))
@@ -461,8 +597,44 @@ async def handle_admin_action_callback(callback: CallbackQuery, db: AsyncSession
 
     parts = callback.data.split(":")
     action = parts[1]
-    target_uid = int(parts[2])
+    target_uid = int(parts[2]) if len(parts) >= 3 and parts[2].isdigit() else 0
     val = int(parts[3]) if len(parts) >= 4 and parts[3].isdigit() else 0
+
+    if action == "reset_all":
+        res = await reset_all_test_restrictions(db)
+        summary = (
+            "🧹 <b>TEST MODU: TÜM KISITLAR VE OTURUMLAR SIFIRLANDI</b>\n\n"
+            f"• <b>Yasağı Kaldırılan Kullanıcı:</b> {res['banned_count']}\n"
+            f"• <b>Ceza Puanı Sıfırlanan:</b> {res['penalized_count']}\n"
+            f"• <b>Kapatılan Aktif Görüşme:</b> {res['active_sessions_count']}\n"
+            "• <b>Redis Köprü Oturumları:</b> Temizlendi ✅\n"
+            "• <b>Tüm Kullanıcı Güven Skorları:</b> ⭐ 100 (Varsayılan) yapıldı.\n\n"
+            "<i>Tüm test kullanıcıları artık gruplarda serbestçe mesaj atabilir ve yeni ilana başvurabilir.</i>"
+        )
+        await callback.answer("🧹 Tüm kısıtlamalar başarıyla sıfırlandı!", show_alert=True)
+        try:
+            await callback.message.reply(summary, reply_markup=get_admin_main_keyboard(), parse_mode="HTML")
+        except Exception:
+            await callback.message.edit_text(summary, reply_markup=get_admin_main_keyboard(), parse_mode="HTML")
+        return
+
+    elif action == "view_active":
+        await callback.answer()
+        text = await get_active_sessions_text(db)
+        await callback.message.reply(text, reply_markup=get_admin_main_keyboard(), parse_mode="HTML")
+        return
+
+    elif action == "view_blacklist":
+        await callback.answer()
+        text = await get_blacklist_text(db)
+        await callback.message.reply(text, reply_markup=get_admin_main_keyboard(), parse_mode="HTML")
+        return
+
+    elif action == "view_stats":
+        await callback.answer()
+        text = await get_stats_text(db)
+        await callback.message.reply(text, reply_markup=get_admin_main_keyboard(), parse_mode="HTML")
+        return
 
     u_stmt = select(User).where(User.id == target_uid)
     res = await db.execute(u_stmt)
@@ -703,25 +875,8 @@ async def cmd_list_active(message: Message, db: AsyncSession):
     if not is_admin_chat(message):
         return
 
-    stmt = select(BridgeSession).where(BridgeSession.is_active == True)
-    res = await db.execute(stmt)
-    sessions = res.scalars().all()
-
-    if not sessions:
-        await message.reply("ℹ️ Şu anda devam eden aktif bir tevkil görüşmesi bulunmamaktadır.")
-        return
-
-    lines = ["📋 <b>Devam Eden Aktif Görüşmeler:</b>\n"]
-    for s in sessions:
-        lines.append(
-            f"• <b>İlan #{s.listing_id}</b> | Başlangıç: {s.started_at.strftime('%H:%M:%S')}\n"
-            f"  İlan Sahibi: <code>{s.creator_id}</code>\n"
-            f"  Aday: <code>{s.applicant_id}</code> ({s.candidate_rank}. Sıra)\n"
-            f"  İlk Mesaj Gönderildi mi: {'Evet ✅' if s.creator_first_message_sent else 'Hayır ⏳'}\n"
-            f"  Durdurmak için: <code>/durdur {s.listing_id}</code>\n"
-        )
-
-    await message.reply("\n".join(lines), parse_mode="HTML")
+    text = await get_active_sessions_text(db)
+    await message.reply(text, reply_markup=get_admin_main_keyboard(), parse_mode="HTML")
 
 
 @router.message(Command("kara_liste"))
@@ -729,24 +884,8 @@ async def cmd_ban_list(message: Message, db: AsyncSession):
     if not is_admin_chat(message):
         return
 
-    now = datetime.utcnow()
-    stmt = select(User).where(User.is_banned == True, User.banned_until > now).order_by(User.banned_until.asc())
-    res = await db.execute(stmt)
-    banned_users = res.scalars().all()
-
-    if not banned_users:
-        await message.reply("ℹ️ Şu anda aktif kısıtlı (yasaklı) kullanıcı bulunmamaktadır.")
-        return
-
-    lines = [f"🔒 <b>Aktif Kısıtlı Kullanıcılar ({len(banned_users)} Kişi):</b>\n"]
-    for u in banned_users:
-        lines.append(
-            f"• <b>{u.full_name}</b> (<code>{u.id}</code>)\n"
-            f"  Bitiş: {format_date_short_tr(u.banned_until)}\n"
-            f"  Sebep: <i>{u.ban_reason}</i>\n"
-            f"  Cezayı Kaldır: <code>/ceza_kaldir {u.id}</code>\n"
-        )
-    await message.reply("\n".join(lines), parse_mode="HTML")
+    text = await get_blacklist_text(db)
+    await message.reply(text, reply_markup=get_admin_main_keyboard(), parse_mode="HTML")
 
 
 @router.message(Command("istatistik", "stats"))
@@ -754,28 +893,5 @@ async def cmd_stats(message: Message, db: AsyncSession):
     if not is_admin_chat(message):
         return
 
-    total_users = (await db.execute(select(func.count(User.id)))).scalar() or 0
-    total_listings = (await db.execute(select(func.count(Listing.id)))).scalar() or 0
-    completed_listings = (await db.execute(select(func.count(Listing.id)).where(Listing.status == "COMPLETED"))).scalar() or 0
-    timeout_cancelled = (await db.execute(select(func.count(Listing.id)).where(Listing.status == "CANCELLED_TIMEOUT"))).scalar() or 0
-    active_sessions = (await db.execute(select(func.count(BridgeSession.id)).where(BridgeSession.is_active == True))).scalar() or 0
-    total_logs = (await db.execute(select(func.count(MessageLog.id)))).scalar() or 0
-    now = datetime.utcnow()
-    banned_count = (await db.execute(select(func.count(User.id)).where(User.is_banned == True, User.banned_until > now))).scalar() or 0
-    avg_score = await RankService.get_system_average_score(db)
-
-    text = (
-        "📊 <b>TEVKİL BOTU SİSTEM İSTATİSTİKLERİ</b>\n\n"
-        f"👥 <b>Kullanıcılar:</b>\n"
-        f"• Toplam Kayıtlı Kullanıcı: <b>{total_users}</b>\n"
-        f"• Sistem Ortalama Rank Skoru: ⭐ <b>{avg_score:.1f}</b>\n"
-        f"• Aktif Kısıtlı Kullanıcı Sayısı: <b>{banned_count}</b>\n\n"
-        f"📋 <b>İlanlar ve Süreçler:</b>\n"
-        f"• Toplam Açılan İlan: <b>{total_listings}</b>\n"
-        f"• Başarıyla Tamamlanan Tevkil: <b>{completed_listings}</b>\n"
-        f"• 30 Dk Zaman Aşımıyla İptal: <b>{timeout_cancelled}</b>\n"
-        f"• Devam Eden Aktif Görüşme: <b>{active_sessions}</b>\n\n"
-        f"🛡️ <b>Denetim Grubu:</b>\n"
-        f"• Toplam Arşivlenen Mesaj/Dosya: <b>{total_logs}</b>"
-    )
-    await message.reply(text, parse_mode="HTML")
+    text = await get_stats_text(db)
+    await message.reply(text, reply_markup=get_admin_main_keyboard(), parse_mode="HTML")
