@@ -208,6 +208,20 @@ async def cmd_start(message: Message, state: FSMContext, db: AsyncSession):
 
     handicap_text = f"⚠️ <b>Aktif Sıra Handikapı:</b> Seviye {handicap}" if handicap > 0 else "✅ <b>Handikap Durumu:</b> Yok (Öncelikli Başvuru)"
 
+    main_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="📚 Kullanım Rehberi", callback_data="user_act:guide"),
+            InlineKeyboardButton(text="👤 Profilim", callback_data="user_act:profile")
+        ],
+        [
+            InlineKeyboardButton(text="🎖️ Baro Kaydımı Doğrula (+10 Puan)", callback_data="user_act:start_baro_verify")
+        ],
+        [
+            InlineKeyboardButton(text="📋 İlanlarım", callback_data="user_act:my_listings"),
+            InlineKeyboardButton(text="📥 Başvurularım", callback_data="user_act:my_applications")
+        ]
+    ])
+
     text = (
         f"👋 <b>Merhaba Sayın {sender.full_name}, Tevkil Botu'na Hoş Geldiniz!</b>\n\n"
         f"Bu bot, Telegram hukuk gruplarındaki tevkil ilanlarını milisaniye hassasiyetli adil bir sıra sistemiyle yönetir, "
@@ -224,12 +238,11 @@ async def cmd_start(message: Message, state: FSMContext, db: AsyncSession):
         f"• <code>/basvurularim</code> - Yaptığınız başvurular\n"
         f"• <code>/baro_kaydet &lt;Baro&gt; &lt;SicilNo&gt;</code> - Baro levha doğrulama\n"
     )
-    await message.reply(text, parse_mode="HTML")
+    await message.reply(text, reply_markup=main_kb, parse_mode="HTML")
 
 
-@router.message(Command("yardim", "help"), F.chat.type == "private")
-async def cmd_help(message: Message):
-    text = (
+def get_user_guide_text() -> str:
+    return (
         "📚 <b>TEVKİL BOTU KULLANIM REHBERİ VE KURALLAR</b>\n\n"
         "1. <b>İlan Açma:</b>\n"
         "   Hukuk gruplarında paylaştığınız mesajda <code>'tevkildir'</code> veya adliye olan il/ilçe adı "
@@ -254,18 +267,37 @@ async def cmd_help(message: Message):
         "   İlan sahibi <code>[🤝 Anlaştık]</code> ile tevkil sürecini tamamlar. "
         "   <code>[❌ Anlaşamadık]</code> seçilip 'Ücret' harici gerekçe belirtilirse sıra otomatik ve zincirleme olarak sıradaki adaya devredilir."
     )
-    await message.reply(text, parse_mode="HTML")
 
 
-from aiogram.fsm.state import State, StatesGroup
-from aiogram.fsm.context import FSMContext
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
+@router.message(Command("yardim", "help"), F.chat.type == "private")
+async def cmd_help(message: Message):
+    text = get_user_guide_text()
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="👤 Profilim", callback_data="user_act:profile"),
+            InlineKeyboardButton(text="🎖️ Baro Doğrula (+10 Puan)", callback_data="user_act:start_baro_verify")
+        ]
+    ])
+    await message.reply(text, reply_markup=kb, parse_mode="HTML")
 
 
-class BaroVerifyStates(StatesGroup):
-    waiting_for_baro = State()
-    waiting_for_sicil = State()
-    waiting_for_document = State()
+@router.callback_query(F.data.in_(["user_act:guide", "user_act:help"]))
+async def handle_callback_guide(callback: CallbackQuery):
+    await callback.answer()
+    guide_text = get_user_guide_text()
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="👤 Profilim", callback_data="user_act:profile"),
+            InlineKeyboardButton(text="🎖️ Baro Doğrula (+10 Puan)", callback_data="user_act:start_baro_verify")
+        ]
+    ])
+    try:
+        await callback.message.reply(guide_text, reply_markup=kb, parse_mode="HTML")
+    except Exception:
+        try:
+            await callback.bot.send_message(chat_id=callback.from_user.id, text=guide_text, reply_markup=kb, parse_mode="HTML")
+        except Exception:
+            pass
 
 
 @router.message(Command("profilim", "durum"), F.chat.type == "private")
@@ -315,9 +347,78 @@ async def cmd_profile(message: Message, db: AsyncSession):
     )
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=baro_btn_text, callback_data="user_act:start_baro_verify")]
+        [InlineKeyboardButton(text=baro_btn_text, callback_data="user_act:start_baro_verify")],
+        [InlineKeyboardButton(text="📚 Kullanım Rehberi", callback_data="user_act:guide")]
     ])
     await message.reply(text, reply_markup=kb, parse_mode="HTML")
+
+
+@router.callback_query(F.data == "user_act:profile")
+async def handle_callback_profile(callback: CallbackQuery, db: AsyncSession):
+    await callback.answer()
+    sender = callback.from_user
+    u_stmt = select(User).where(User.id == sender.id)
+    res = await db.execute(u_stmt)
+    user = res.scalar_one_or_none()
+
+    if not user:
+        user = User(
+            id=sender.id,
+            username=sender.username,
+            full_name=sender.full_name or "",
+            rank_score=100,
+            penalty_points=0
+        )
+        db.add(user)
+        await db.commit()
+        await db.refresh(user)
+
+    net_score = RankService.calculate_net_score(user.rank_score, user.penalty_points)
+    avg_score = await RankService.get_system_average_score(db)
+    handicap = RankService.determine_handicap_level(net_score, avg_score, user.penalty_points)
+
+    if user.is_baro_verified:
+        baro_status = f"🎖️ <b>ONAYLI AVUKAT</b> ({user.baro_name} Barosu - Sicil: {user.baro_sicil_no})"
+        baro_btn_text = "🔄 Baro Bilgilerimi Güncelle"
+    elif user.baro_verification_status == "PENDING":
+        baro_status = f"⏳ <b>ONAY BEKLİYOR</b> ({user.baro_name or 'Belirtilmedi'} - Sicil: {user.baro_sicil_no or 'Yok'})"
+        baro_btn_text = "⏳ Doğrulama İnceleniyor"
+    elif user.baro_verification_status == "REJECTED":
+        baro_status = f"❌ <b>REDDEDİLDİ</b> (Yeniden başvuru için /baro_dogrula)"
+        baro_btn_text = "🎖️ Yeniden Baro Doğrula"
+    else:
+        baro_status = "❌ <b>Doğrulanmadı</b> (/baro_dogrula)"
+        baro_btn_text = "🎖️ Baro Kaydımı Doğrula (+10 Puan)"
+
+    ban_status = f"⛔ <b>Kısıtlı:</b> {format_date_short_tr(user.banned_until)} tarihine kadar ({user.ban_reason})" if user.is_banned else "✅ <b>Aktif (Kısıtlama Yok)</b>"
+
+    text = (
+        f"👤 <b>KULLANICI PROFİL VE GÜVEN RAPORU</b>\n\n"
+        f"• <b>Ad Soyad:</b> {user.full_name}\n"
+        f"• <b>Telegram ID:</b> <code>{user.id}</code>\n"
+        f"• <b>Baro Durumu:</b> {baro_status}\n"
+        f"• <b>Hesap Durumu:</b> {ban_status}\n\n"
+        f"⭐ <b>Rank & Güven Puanı:</b>\n"
+        f"• <b>Kazanılan Puan:</b> {user.rank_score}\n"
+        f"• <b>Ceza Puanı:</b> {user.penalty_points}\n"
+        f"• <b>Efektif Net Puan:</b> ⭐ <b>{net_score}</b> (Sistem Ortalaması: {avg_score:.1f})\n"
+        f"• <b>Kademeli Sıra Handikapı:</b> {f'{handicap} Kademe' if handicap > 0 else 'Yok'}\n\n"
+        f"📈 <b>İşlem İstatistikleri:</b>\n"
+        f"• Tamamlanan Başarılı Tevkil: <b>{user.completed_tevkils_count}</b>\n"
+        f"• İptal Edilen / Zaman Aşımı: <b>{user.cancelled_tevkils_count}</b>"
+    )
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=baro_btn_text, callback_data="user_act:start_baro_verify")],
+        [InlineKeyboardButton(text="📚 Kullanım Rehberi", callback_data="user_act:guide")]
+    ])
+    try:
+        await callback.message.reply(text, reply_markup=kb, parse_mode="HTML")
+    except Exception:
+        try:
+            await callback.bot.send_message(chat_id=callback.from_user.id, text=text, reply_markup=kb, parse_mode="HTML")
+        except Exception:
+            pass
 
 
 @router.callback_query(F.data == "user_act:start_baro_verify")
@@ -541,3 +642,70 @@ async def cmd_my_applications(message: Message, db: AsyncSession):
             f"  Puan: ⭐ {a.user_rank_score} | Tarih: {format_date_short_tr(a.applied_at)}\n"
         )
     await message.reply("\n".join(lines), parse_mode="HTML")
+
+
+@router.callback_query(F.data == "user_act:my_listings")
+async def handle_callback_my_listings(callback: CallbackQuery, db: AsyncSession):
+    await callback.answer()
+    sender = callback.from_user
+    stmt = (
+        select(Listing)
+        .where(Listing.creator_id == sender.id)
+        .order_by(Listing.id.desc())
+        .limit(10)
+    )
+    res = await db.execute(stmt)
+    listings = res.scalars().all()
+
+    if not listings:
+        msg = "ℹ️ Henüz yayınlanmış bir tevkil ilanınız bulunmamaktadır."
+    else:
+        lines = ["📋 <b>Son Tevkil İlanlarınız:</b>\n"]
+        for l in listings:
+            lines.append(
+                f"• <b>İlan #{l.id}</b> | Durum: <code>{l.status}</code>\n"
+                f"  Tarih: {format_date_short_tr(l.created_at)}\n"
+                f"  İçerik: <i>{l.raw_text[:80]}...</i>\n"
+            )
+        msg = "\n".join(lines)
+
+    try:
+        await callback.message.reply(msg, parse_mode="HTML")
+    except Exception:
+        try:
+            await callback.bot.send_message(chat_id=callback.from_user.id, text=msg, parse_mode="HTML")
+        except Exception:
+            pass
+
+
+@router.callback_query(F.data == "user_act:my_applications")
+async def handle_callback_my_applications(callback: CallbackQuery, db: AsyncSession):
+    await callback.answer()
+    sender = callback.from_user
+    stmt = (
+        select(Application)
+        .where(Application.user_id == sender.id)
+        .order_by(Application.id.desc())
+        .limit(10)
+    )
+    res = await db.execute(stmt)
+    apps = res.scalars().all()
+
+    if not apps:
+        msg = "ℹ️ Henüz bir tevkil ilanına başvurunuz bulunmamaktadır."
+    else:
+        lines = ["📋 <b>Son Başvurularınız:</b>\n"]
+        for a in apps:
+            lines.append(
+                f"• <b>İlan #{a.listing_id}</b> | Sıra: <b>{a.queue_number}.</b> | Durum: <code>{a.status}</code>\n"
+                f"  Puan: ⭐ {a.user_rank_score} | Tarih: {format_date_short_tr(a.applied_at)}\n"
+            )
+        msg = "\n".join(lines)
+
+    try:
+        await callback.message.reply(msg, parse_mode="HTML")
+    except Exception:
+        try:
+            await callback.bot.send_message(chat_id=callback.from_user.id, text=msg, parse_mode="HTML")
+        except Exception:
+            pass

@@ -45,3 +45,22 @@ async def test_cmd_help():
     reply_text = message.reply.call_args[0][0]
     assert "30 Dakika Kuralı" in reply_text
     assert "Milisaniye Sıralama" in reply_text
+
+
+@pytest.mark.asyncio
+async def test_handle_callback_guide():
+    from bot.handlers.user_panel import handle_callback_guide
+    from aiogram.types import CallbackQuery
+
+    callback = MagicMock(spec=CallbackQuery)
+    callback.answer = AsyncMock()
+    callback.from_user = TelegramUser(id=123456, is_bot=False, first_name="Ahmet", last_name="Yılmaz", username="ahmety")
+    callback.message = MagicMock(spec=Message)
+    callback.message.chat = Chat(id=123456, type="private")
+    callback.message.reply = AsyncMock()
+
+    await handle_callback_guide(callback)
+    assert callback.answer.called
+    assert callback.message.reply.called
+    guide_reply = callback.message.reply.call_args[0][0]
+    assert "TEVKİL BOTU KULLANIM REHBERİ" in guide_reply
