@@ -1,3 +1,4 @@
+import re
 from datetime import datetime, timedelta
 from aiogram import Router, F
 from aiogram.types import Message
@@ -359,55 +360,168 @@ async def cmd_add_rank_points(message: Message, db: AsyncSession):
     await message.reply(f"⭐ <code>{user_id}</code> kullanıcısına <b>+{points} Rank Puanı</b> eklendi. (Net: {net})", parse_mode="HTML")
 
 
-@router.message(Command("kullanici_bilgi"))
-async def cmd_user_info(message: Message, db: AsyncSession):
-    if not is_admin_chat(message):
-        return
-
-    args = message.text.split()
-    if len(args) < 2:
-        await message.reply("⚠️ Kullanım: <code>/kullanici_bilgi &lt;user_id&gt;</code>", parse_mode="HTML")
-        return
-
-    try:
-        user_id = int(args[1])
-    except ValueError:
-        await message.reply("❌ Geçersiz kullanıcı ID.")
-        return
-
-    u_stmt = select(User).where(User.id == user_id)
-    res = await db.execute(u_stmt)
-    user = res.scalar_one_or_none()
-
-    if not user:
-        await message.reply("❌ Veritabanında bu ID'ye ait kullanıcı bulunamadı.")
-        return
-
+async def render_user_profile_dossier(user: User, db: AsyncSession) -> str:
     net_score = RankService.calculate_net_score(user.rank_score, user.penalty_points)
     avg_score = await RankService.get_system_average_score(db)
     handicap = RankService.determine_handicap_level(net_score, avg_score, user.penalty_points)
 
-    ban_info = f"⛔ Kısıtlı ({format_date_short_tr(user.banned_until)} - {user.ban_reason})" if user.is_banned else "✅ Aktif"
-    baro_info = f"✅ {user.baro_name} ({user.baro_sicil_no})" if user.is_baro_verified else "❌ Doğrulanmadı"
+    # Ceza loglarını çek (en son 5 ceza)
+    p_stmt = select(PenaltyLog).where(PenaltyLog.user_id == user.id).order_by(PenaltyLog.id.desc()).limit(5)
+    p_res = await db.execute(p_stmt)
+    penalty_logs = p_res.scalars().all()
 
-    text = (
-        f"👤 <b>KULLANICI BİLGİ KARTI</b>\n\n"
-        f"• <b>Ad Soyad:</b> {user.full_name}\n"
-        f"• <b>Kullanıcı Adı:</b> @{user.username or 'Yok'}\n"
+    # İlan ve başvuru istatistikleri
+    listing_count_stmt = select(func.count(Listing.id)).where(Listing.creator_id == user.id)
+    listing_count = (await db.execute(listing_count_stmt)).scalar() or 0
+
+    app_count_stmt = select(func.count(Application.id)).where(Application.user_id == user.id)
+    app_count = (await db.execute(app_count_stmt)).scalar() or 0
+
+    # Kısıtlama durumu
+    now = datetime.utcnow()
+    if user.is_banned and user.banned_until and user.banned_until > now:
+        ban_until_str = format_date_short_tr(user.banned_until)
+        ban_status = f"⛔ <b>SİSTEMDEN UZAKLAŞTIRILMIŞ</b>\n  • <b>Kısıtlama Bitiş:</b> {ban_until_str}\n  • <b>Gerekçe:</b> <i>{user.ban_reason or 'Kural ihlali'}</i>"
+    else:
+        ban_status = "✅ <b>Aktif / Temiz</b> (Kısıtlama Yok)"
+
+    # Baro bilgisi
+    if user.is_baro_verified:
+        baro_status = f"✅ Doğrulanmış ({user.baro_name} - Sicil: {user.baro_sicil_no})"
+    else:
+        baro_status = "❌ Henüz Doğrulanmadı"
+
+    # İhlal kayıtları dökümü
+    if penalty_logs:
+        penalty_lines = []
+        for p in penalty_logs:
+            p_date = format_date_short_tr(p.created_at)
+            penalty_lines.append(f"  • 📅 <code>{p_date}</code> — <b>+{p.points} Ceza Puanı</b>\n    └ <i>Sebep: {p.reason}</i> (Kaynak: <code>{p.issued_by}</code>)")
+        penalty_text = "\n".join(penalty_lines)
+    else:
+        penalty_text = "  <i>(Kayıtlı herhangi bir ceza veya ihlal logu bulunmuyor.)</i>"
+
+    handicap_str = f"⚠️ <b>-{handicap} Sıra Gecikme Cezası</b>" if handicap > 0 else "✅ Handikap Yok (Normal Sıra)"
+
+    return (
+        f"🕵️ <b>KULLANICI DENETİM VE İHLAL DOSYASI</b>\n\n"
+        f"👤 <b>Kimlik Bilgileri:</b>\n"
+        f"• <b>Ad Soyad:</b> {user.full_name or 'Belirtilmemiş'}\n"
+        f"• <b>Kullanıcı Adı:</b> @{user.username or 'yok'}\n"
         f"• <b>Telegram ID:</b> <code>{user.id}</code>\n"
-        f"• <b>Kayıt Tarihi:</b> {format_date_short_tr(user.created_at)}\n"
-        f"• <b>Hesap Durumu:</b> {ban_info}\n"
-        f"• <b>Baro Kaydı:</b> {baro_info}\n\n"
-        f"⭐ <b>Rank ve Skor Durumu:</b>\n"
-        f"• Rank Puanı: <b>{user.rank_score}</b>\n"
-        f"• Ceza Puanı: <b>{user.penalty_points}</b>\n"
-        f"• Efektif Net Skor: ⭐ <b>{net_score}</b>\n"
-        f"• Kademeli Sıra Handikapı: <b>{f'{handicap} Kademe' if handicap > 0 else 'Yok'}</b>\n\n"
-        f"📊 <b>İşlem İstatistikleri:</b>\n"
-        f"• Tamamlanan Tevkil: <b>{user.completed_tevkils_count}</b>\n"
-        f"• İptal Edilen / Zaman Aşımı: <b>{user.cancelled_tevkils_count}</b>"
+        f"• <b>Baro Kaydı:</b> {baro_status}\n"
+        f"• <b>Kayıt Tarihi:</b> {format_date_short_tr(user.created_at)}\n\n"
+        f"🛡️ <b>Hesap ve Ceza Durumu:</b>\n"
+        f"• <b>Durum:</b> {ban_status}\n"
+        f"• <b>Net Güven Skoru:</b> ⭐ <b>{net_score}</b> (Rank: {user.rank_score} | Toplam Ceza: {user.penalty_points})\n"
+        f"• <b>Sıra Handikapı:</b> {handicap_str}\n\n"
+        f"📊 <b>Tevkil İstatistikleri:</b>\n"
+        f"• Başarıyla Tamamlanan: <b>{user.completed_tevkils_count}</b>\n"
+        f"• İptal Edilen / Kural İhlali: <b>{user.cancelled_tevkils_count}</b>\n"
+        f"• Açtığı Toplam İlan: <b>{listing_count}</b> | Başvurduğu İlan: <b>{app_count}</b>\n\n"
+        f"🚨 <b>Son İhlal ve Ceza Geçmişi:</b>\n"
+        f"{penalty_text}\n\n"
+        f"🛠️ <b>Yönetici Hızlı Müdahale Komutları:</b>\n"
+        f"• Uzaklaştır: <code>/kullanici_uzaklastir {user.id} 5 Gerekçe</code>\n"
+        f"• Ceza Puanı: <code>/ceza_puani_ver {user.id} 10 Gerekçe</code>\n"
+        f"• Kısıtlama Kaldır: <code>/uzaklastirma_kaldir {user.id}</code>"
     )
-    await message.reply(text, parse_mode="HTML")
+
+
+@router.message(Command("kimdir", "kullanici_bilgi", "ihlal", "profil"))
+async def cmd_user_info(message: Message, db: AsyncSession):
+    if not is_admin_chat(message):
+        return
+
+    args = message.text.split(maxsplit=1)
+    target_identifier = None
+
+    if len(args) >= 2:
+        target_identifier = args[1].strip()
+    elif message.reply_to_message and message.reply_to_message.from_user and not message.reply_to_message.from_user.is_bot:
+        target_identifier = str(message.reply_to_message.from_user.id)
+
+    if not target_identifier:
+        await message.reply("⚠️ Kullanım: <code>/kimdir &lt;@kullanici_adi veya ID&gt;</code>", parse_mode="HTML")
+        return
+
+    user = await find_user_by_query(target_identifier, db)
+    if not user:
+        await message.reply(
+            f"❌ <b>'{target_identifier}'</b> kullanıcı adına, ID'sine veya ismine ait sistemde bir kayıt bulunamadı.\n"
+            f"<i>Kullanıcının daha önce bota veya gruplara en az 1 kez mesaj atmış / başvurmuş olması gerekir.</i>",
+            parse_mode="HTML"
+        )
+        return
+
+    dossier = await render_user_profile_dossier(user, db)
+    await message.reply(dossier, parse_mode="HTML")
+
+
+async def find_user_by_query(query_str: str, db: AsyncSession) -> User:
+    query_str = query_str.strip()
+    user = None
+
+    if query_str.isdigit():
+        u_stmt = select(User).where(User.id == int(query_str))
+        res = await db.execute(u_stmt)
+        user = res.scalar_one_or_none()
+
+    if not user:
+        clean_uname = query_str.lstrip("@").lower()
+        u_stmt = select(User).where(func.lower(User.username) == clean_uname)
+        res = await db.execute(u_stmt)
+        user = res.scalar_one_or_none()
+
+    if not user:
+        u_stmt = select(User).where(User.full_name.ilike(f"%{query_str}%"))
+        res = await db.execute(u_stmt)
+        user = res.scalar_one_or_none()
+
+    return user
+
+
+@router.message(F.chat.id == settings.admin_chat_id)
+async def handle_admin_natural_query(message: Message, db: AsyncSession):
+    text = (message.text or message.caption or "").strip()
+    if not text:
+        return
+
+    # Komut ise zaten üst handler yakalar
+    if text.startswith("/"):
+        return
+
+    # 1. Regex ile "@username kimdir", "username kimdir", "kimdir @username", "kimdir 123456" yakala
+    match = re.search(r"@?([a-zA-Z0-9_]+)\s+kimdir\??", text, re.IGNORECASE)
+    if not match:
+        match = re.search(r"\bkimdir\s+@?([a-zA-Z0-9_]+)\??", text, re.IGNORECASE)
+
+    target_identifier = None
+    if match:
+        target_identifier = match.group(1).strip()
+    elif re.match(r"^\s*kimdir\s*\??$", text, re.IGNORECASE) and message.reply_to_message:
+        reply_user = message.reply_to_message.from_user
+        if reply_user and not reply_user.is_bot:
+            target_identifier = str(reply_user.id)
+        else:
+            reply_text = message.reply_to_message.text or message.reply_to_message.caption or ""
+            id_match = re.search(r"(?:ID|id|User ID):\s*<code>?(\d+)</code>?", reply_text)
+            if id_match:
+                target_identifier = id_match.group(1)
+
+    if not target_identifier:
+        return
+
+    user = await find_user_by_query(target_identifier, db)
+    if not user:
+        await message.reply(
+            f"❌ <b>'{target_identifier}'</b> sorgusuna ait sistemde kayıtlı kullanıcı bulunamadı.",
+            parse_mode="HTML"
+        )
+        return
+
+    dossier = await render_user_profile_dossier(user, db)
+    await message.reply(dossier, parse_mode="HTML")
 
 
 @router.message(Command("ilan_detay"))
