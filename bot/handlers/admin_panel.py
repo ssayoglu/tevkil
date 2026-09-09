@@ -1272,7 +1272,7 @@ async def cmd_listing_logs(message: Message, db: AsyncSession):
         await message.reply(f"❌ <b>#{listing_id}</b> numaralı ilana ait kayıt bulunamadı.", parse_mode="HTML")
 
 
-@router.message((F.chat.id == settings.admin_chat_id) | (F.chat.type == "private"))
+@router.message(F.chat.id == settings.admin_chat_id)
 async def handle_admin_natural_query(message: Message, db: AsyncSession):
     text = (message.text or message.caption or "").strip()
     if not text:
