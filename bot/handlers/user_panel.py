@@ -41,35 +41,137 @@ async def cmd_start(message: Message, db: AsyncSession):
     from bot.services.bridge_service import BridgeService
     await BridgeService.flush_pending_messages(message.bot, sender.id)
 
-    # Aktif bir köprü görüşmesi var mı kontrol et
+    # Parametre kontrolü (örn. /start chat_6)
+    start_arg = None
+    parts = (message.text or "").split()
+    if len(parts) > 1:
+        start_arg = parts[1].strip()
+
+    if start_arg and start_arg.startswith("chat_"):
+        try:
+            target_lid = int(start_arg.replace("chat_", ""))
+            l_stmt = select(Listing).where(Listing.id == target_lid)
+            l_res = await db.execute(l_stmt)
+            target_listing = l_res.scalar_one_or_none()
+
+            if not target_listing:
+                await message.reply("❌ Tevkil ilanı bulunamadı.")
+                return
+
+            if target_listing.status in ["COMPLETED", "CANCELLED_TIMEOUT", "CANCELLED_ADMIN"]:
+                await message.reply(
+                    f"ℹ️ <b>Tevkil İlanı (#{target_lid})</b> tamamlanmış veya kapatılmıştır.\n"
+                    f"Durum: <code>{target_listing.status}</code>",
+                    parse_mode="HTML"
+                )
+                return
+
+            # 1. İlan Sahibi İse:
+            if sender.id == target_listing.creator_id:
+                s_stmt = select(BridgeSession).where(BridgeSession.listing_id == target_lid, BridgeSession.is_active == True)
+                s_res = await db.execute(s_stmt)
+                active_sess = s_res.scalar_one_or_none()
+
+                if active_sess:
+                    await message.reply(
+                        f"🔗 <b>Tevkil Görüşme Paneli (İlan #{target_lid})</b>\n\n"
+                        f"👤 <b>Görüştüğünüz Kişi:</b> {active_sess.candidate_rank}. Sıradaki Başvuran Aday\n\n"
+                        f"💬 <b>İletişim:</b> Bu sohbete yazacağınız her mesaj, fotoğraf, ses kaydı ve PDF "
+                        f"karşı tarafa <b>anonim olarak iletilir</b>.\n\n"
+                        f"Görüşme tamamlandığında aşağıdaki butonlardan durumu teyit edebilirsiniz:",
+                        reply_markup=get_confirmation_keyboard(target_lid),
+                        parse_mode="HTML"
+                    )
+                    return
+                else:
+                    await message.reply(
+                        f"📌 <b>Tevkil İlanınız (#{target_lid})</b> yayındadır.\n"
+                        f"Aday başvuruları beklenmektedir. Başvuru geldiğinde anında buradan bildirilecektir.",
+                        parse_mode="HTML"
+                    )
+                    return
+
+            # 2. Başvuran Aday İse:
+            app_stmt = select(Application).where(Application.listing_id == target_lid, Application.user_id == sender.id)
+            app_res = await db.execute(app_stmt)
+            app_record = app_res.scalar_one_or_none()
+
+            if app_record:
+                if app_record.status == "ACTIVE":
+                    await message.reply(
+                        f"🔗 <b>Tevkil Görüşme Paneli (İlan #{target_lid})</b>\n\n"
+                        f"👤 <b>Görüştüğünüz Kişi:</b> İlan Sahibi Meslektaşımız\n\n"
+                        f"💬 <b>İletişim:</b> Bu sohbete yazacağınız her mesaj, fotoğraf, ses kaydı ve PDF "
+                        f"ilan sahibine <b>anonim olarak iletilir</b>.\n\n"
+                        f"Görüşme tamamlandığında veya vazgeçmek istediğinizde aşağıdaki butonlardan teyit edebilirsiniz:",
+                        reply_markup=get_confirmation_keyboard(target_lid),
+                        parse_mode="HTML"
+                    )
+                    return
+                elif app_record.status == "WAITING":
+                    await message.reply(
+                        f"⏳ <b>Sayın Meslektaşımız (İlan #{target_lid})</b>\n\n"
+                        f"Siz bu ilanda <b>{app_record.queue_number}. sıradaki yedek adaysınız</b>.\n"
+                        f"Şu anda ilan sahibi 1. sıradaki meslektaşımız ile görüşmektedir.\n\n"
+                        f"<i>Önceki adayla anlaşma sağlanamazsa sıra otomatik olarak size devredilecek ve buradan bilgilendirileceksiniz.</i>",
+                        parse_mode="HTML"
+                    )
+                    return
+                elif app_record.status == "ACCEPTED":
+                    await message.reply(f"🤝 Bu ilan (#{target_lid}) için anlaşmanız onaylanmıştır.", parse_mode="HTML")
+                    return
+                else:
+                    await message.reply(f"ℹ️ Bu ilan (#{target_lid}) için görüşmeniz sonlandırılmıştır.", parse_mode="HTML")
+                    return
+            else:
+                await message.reply(
+                    f"ℹ️ <b>İlan #{target_lid}</b> için henüz bir başvurunuz bulunmamaktadır.\n"
+                    f"Gruptaki <b>[📋 Başvur (Sıraya Gir)]</b> butonuna tıklayarak sıraya girebilirsiniz.",
+                    parse_mode="HTML"
+                )
+                return
+
+        except Exception as e:
+            print(f"[UserPanel] chat_ parametre ayrıştırma hatası: {e}")
+
+    # Genel Aktif Köprü Kontrolü (DB doğrulamalı)
     active_bridge = await RedisQueueService.get_active_bridge(sender.id)
     if active_bridge:
         listing_id = active_bridge["listing_id"]
         role = active_bridge["role"]
         rank_idx = active_bridge.get("candidate_rank", 1)
+        sess_id = active_bridge.get("session_id")
 
-        if role == "CREATOR":
-            await message.reply(
-                f"🔗 <b>Aktif Tevkil Görüşmeniz Bulunmaktadır! (İlan #{listing_id})</b>\n\n"
-                f"👤 <b>Görüştüğünüz Kişi:</b> {rank_idx}. Sıradaki Başvuran Aday\n\n"
-                f"💬 <b>İletişim:</b> Bu sohbete yazacağınız her mesaj, fotoğraf, ses kaydı ve PDF "
-                f"karşı tarafa <b>anonim olarak iletilir</b>.\n\n"
-                f"Görüşme tamamlandığında aşağıdaki butonlardan durumu teyit edebilirsiniz:",
-                reply_markup=get_confirmation_keyboard(listing_id),
-                parse_mode="HTML"
-            )
-            return
+        # DB'de gerçekten aktif mi kontrol et
+        s_stmt = select(BridgeSession).where(BridgeSession.id == sess_id)
+        s_res = await db.execute(s_stmt)
+        db_sess = s_res.scalar_one_or_none()
+
+        if db_sess and db_sess.is_active:
+            if role == "CREATOR":
+                await message.reply(
+                    f"🔗 <b>Aktif Tevkil Görüşmeniz Bulunmaktadır! (İlan #{listing_id})</b>\n\n"
+                    f"👤 <b>Görüştüğünüz Kişi:</b> {rank_idx}. Sıradaki Başvuran Aday\n\n"
+                    f"💬 <b>İletişim:</b> Bu sohbete yazacağınız her mesaj, fotoğraf, ses kaydı ve PDF "
+                    f"karşı tarafa <b>anonim olarak iletilir</b>.\n\n"
+                    f"Görüşme tamamlandığında aşağıdaki butonlardan durumu teyit edebilirsiniz:",
+                    reply_markup=get_confirmation_keyboard(listing_id),
+                    parse_mode="HTML"
+                )
+                return
+            else:
+                await message.reply(
+                    f"🔗 <b>Aktif Tevkil Görüşmeniz Bulunmaktadır! (İlan #{listing_id})</b>\n\n"
+                    f"👤 <b>Görüştüğünüz Kişi:</b> İlan Sahibi Meslektaşımız\n\n"
+                    f"💬 <b>İletişim:</b> Bu sohbete yazacağınız her mesaj, fotoğraf, ses kaydı ve PDF "
+                    f"ilan sahibine <b>anonim olarak iletilir</b>.\n\n"
+                    f"Görüşme tamamlandığında veya vazgeçmek istediğinizde aşağıdaki butonlardan teyit edebilirsiniz:",
+                    reply_markup=get_confirmation_keyboard(listing_id),
+                    parse_mode="HTML"
+                )
+                return
         else:
-            await message.reply(
-                f"🔗 <b>Aktif Tevkil Görüşmeniz Bulunmaktadır! (İlan #{listing_id})</b>\n\n"
-                f"👤 <b>Görüştüğünüz Kişi:</b> İlan Sahibi Meslektaşımız\n\n"
-                f"💬 <b>İletişim:</b> Bu sohbete yazacağınız her mesaj, fotoğraf, ses kaydı ve PDF "
-                f"ilan sahibine <b>anonim olarak iletilir</b>.\n\n"
-                f"Görüşme tamamlandığında veya vazgeçmek istediğinizde aşağıdaki butonlardan teyit edebilirsiniz:",
-                reply_markup=get_confirmation_keyboard(listing_id),
-                parse_mode="HTML"
-            )
-            return
+            await RedisQueueService.remove_active_bridge(sender.id)
 
     handicap_text = f"⚠️ <b>Aktif Sıra Handikapı:</b> Seviye {handicap}" if handicap > 0 else "✅ <b>Handikap Durumu:</b> Yok (Öncelikli Başvuru)"
 

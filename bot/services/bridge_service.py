@@ -103,13 +103,13 @@ class BridgeService:
                         [
                             InlineKeyboardButton(
                                 text="💬 İlan Sahibine Yaz (1. Sıra Aday)",
-                                url="https://t.me/Tevkil_Denetim_Merkezi_bot?start=1"
+                                url=f"https://t.me/Tevkil_Denetim_Merkezi_bot?start=chat_{listing_id}"
                             )
                         ],
                         [
                             InlineKeyboardButton(
                                 text="💼 Adayla Görüş (İlan Sahibi)",
-                                url="https://t.me/Tevkil_Denetim_Merkezi_bot?start=1"
+                                url=f"https://t.me/Tevkil_Denetim_Merkezi_bot?start=chat_{listing_id}"
                             )
                         ]
                     ]

@@ -62,8 +62,12 @@ async def handle_agree(callback: CallbackQuery, db: AsyncSession):
     s_res = await db.execute(s_stmt)
     session = s_res.scalar_one_or_none()
 
-    if not session or user.id not in [session.creator_id, session.applicant_id]:
-        await callback.answer("⚠️ Sadece bu tevkil görüşmesinin tarafları onay verebilir.", show_alert=True)
+    if not session:
+        await callback.answer("⚠️ Bu görüşme zaten tamamlanmış veya kapatılmıştır.", show_alert=True)
+        return
+
+    if user.id not in [session.creator_id, session.applicant_id]:
+        await callback.answer("⚠️ Sadece bu tevkil görüşmesinde aktif olan taraflar onay verebilir.", show_alert=True)
         return
 
     now = datetime.utcnow()
@@ -163,8 +167,12 @@ async def handle_disagree_prompt(callback: CallbackQuery, db: AsyncSession):
     s_res = await db.execute(s_stmt)
     session = s_res.scalar_one_or_none()
 
-    if not session or user.id not in [session.creator_id, session.applicant_id]:
-        await callback.answer("⚠️ Sadece bu görüşmenin tarafları anlaşamama bildirebilir.", show_alert=True)
+    if not session:
+        await callback.answer("⚠️ Bu görüşme zaten tamamlanmış veya kapatılmıştır.", show_alert=True)
+        return
+
+    if user.id not in [session.creator_id, session.applicant_id]:
+        await callback.answer("⚠️ Sadece bu görüşmenin aktif tarafları anlaşamama bildirebilir.", show_alert=True)
         return
 
     role_prefix = "creator" if user.id == session.creator_id else "applicant"
