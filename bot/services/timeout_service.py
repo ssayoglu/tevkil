@@ -61,6 +61,16 @@ class TimeoutService:
             if not session or not session.is_active:
                 return  # Zaten görüşme tamamlanmış veya kapatılmış
 
+            listing_stmt = select(Listing).where(Listing.id == session.listing_id)
+            l_res = await db.execute(listing_stmt)
+            listing = l_res.scalar_one_or_none()
+
+            # İlan aktif olarak MATCHED durumunda değilse zaman aşımı cezası verme
+            if not listing or listing.status != "MATCHED":
+                session.is_active = False
+                await db.commit()
+                return
+
             # İlan sahibi ilk mesajı attı mı?
             if session.creator_first_message_sent:
                 return  # Kural yerine getirilmiş
@@ -76,9 +86,6 @@ class TimeoutService:
             session.close_reason = "TIMEOUT_NO_FIRST_MESSAGE"
 
             # İlan durumunu güncelle
-            listing_stmt = select(Listing).where(Listing.id == listing_id)
-            l_res = await db.execute(listing_stmt)
-            listing = l_res.scalar_one_or_none()
             group_id = listing.group_id if listing else 0
             if listing:
                 listing.status = "CANCELLED_TIMEOUT"
@@ -183,8 +190,10 @@ class TimeoutService:
                     now = datetime.utcnow()
                     stmt = (
                         select(BridgeSession)
+                        .join(Listing, BridgeSession.listing_id == Listing.id)
                         .where(
                             BridgeSession.is_active == True,
+                            Listing.status == "MATCHED",
                             BridgeSession.creator_first_message_sent == False,
                             BridgeSession.timeout_at <= now
                         )
