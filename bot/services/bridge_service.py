@@ -95,24 +95,34 @@ class BridgeService:
             group_id=group_id
         )
 
-        # 1. Ana Grupta "Görüşme Başladı" Duyurusu Yap
+        # 1. Ana Grupta "Görüşme Başladı / Adayla İletişime Geç" Duyurusu ve Butonu
         if group_id:
             try:
+                group_contact_kb = InlineKeyboardMarkup(
+                    inline_keyboard=[
+                        [
+                            InlineKeyboardButton(
+                                text=f"💬 {candidate_rank}. Sıradaki Başvuranla Görüş (DM)",
+                                url="https://t.me/Tevkil_Denetim_Merkezi_bot?start=1"
+                            )
+                        ]
+                    ]
+                )
                 await bot.send_message(
                     chat_id=group_id,
                     text=(
-                        f"📢 <b>[GÖRÜŞME BAŞLADI — İlan #{listing_id}]</b>\n\n"
-                        f"🟢 İlan sahibi meslektaşımız ile <b>{candidate_rank}. sıradaki başvuran aday</b> "
-                        f"arasında anonim görüşme başlatılmıştır.\n\n"
-                        f"<i>(Taraflar bot özel mesajı üzerinden güvenli ve anonim olarak yazışmaktadır.)</i>"
+                        f"📢 <b>[BAŞVURU ALINDI — İlan #{listing_id}]</b>\n\n"
+                        f"🟢 <b>{candidate_rank}. sıradaki meslektaşımız</b> ilana başvurdu ve görüşme hakkı kazandı.\n\n"
+                        f"👤 <b>Sayın İlan Sahibi:</b> Adayınız ile görüşmeyi başlatmak ve detayları iletmek için lütfen aşağıdaki butona tıklayınız:\n\n"
+                        f"<i>(Görüşmeler bot üzerinden anonim ve güvenli olarak yürütülür.)</i>"
                     ),
+                    reply_markup=group_contact_kb,
                     parse_mode="HTML"
                 )
             except Exception as e:
                 print(f"[BridgeService] Gruba görüşme başladı duyurusu iletilemedi: {e}")
 
         # 2. İlan Sahibine DM Bildirimi
-        creator_delivered = False
         try:
             await bot.send_message(
                 chat_id=creator_id,
@@ -128,25 +138,8 @@ class BridgeService:
                 reply_markup=get_confirmation_keyboard(listing_id),
                 parse_mode="HTML"
             )
-            creator_delivered = True
         except Exception as e:
             print(f"[BridgeService] İlan sahibine başlatma mesajı gönderilemedi (Kullanıcı botu başlatmamış olabilir): {e}")
-
-        # Eğer ilan sahibi botu başlatmadığı için mesaj gitmediyse gruba uyarı gönder
-        if not creator_delivered and group_id:
-            try:
-                await bot.send_message(
-                    chat_id=group_id,
-                    text=(
-                        f"⚠️ <b>Sayın İlan Sahibi Meslektaşımız (#{listing_id}):</b>\n"
-                        f"{candidate_rank}. sıra başvurusu alındı ancak botu özelden henüz başlatmadığınız için "
-                        f"adayla görüşme başlatılamadı.\n\n"
-                        f"👉 Lütfen @Tevkil_Denetim_Merkezi_bot botuna tıklayıp <b>/start</b> diyerek görüşmeyi başlatınız!"
-                    ),
-                    parse_mode="HTML"
-                )
-            except Exception:
-                pass
 
         # 3. Adaya DM Bildirimi (Anlaştık / Anlaşamadık butonlarıyla birlikte)
         try:

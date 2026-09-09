@@ -94,7 +94,7 @@ def build_apply_keyboard(listing_id: int) -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton(
-                    text="🤖 Botu Başlat (DM)",
+                    text="💬 Başvuranla İletişime Geç (DM)",
                     url="https://t.me/Tevkil_Denetim_Merkezi_bot?start=1"
                 )
             ]
