@@ -58,7 +58,7 @@ async def cmd_start(message: Message, db: AsyncSession):
                 await message.reply("❌ Tevkil ilanı bulunamadı.")
                 return
 
-            if target_listing.status in ["COMPLETED", "CANCELLED_TIMEOUT", "CANCELLED_ADMIN"]:
+            if target_listing.status in ["COMPLETED", "CLOSED_DISAGREED", "CANCELLED_TIMEOUT", "CANCELLED_ADMIN"]:
                 await message.reply(
                     f"ℹ️ <b>Tevkil İlanı (#{target_lid})</b> tamamlanmış veya kapatılmıştır.\n"
                     f"Durum: <code>{target_listing.status}</code>",

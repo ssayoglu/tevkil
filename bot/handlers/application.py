@@ -85,6 +85,8 @@ async def update_group_listing_board(bot, listing: Listing, db: AsyncSession = N
     # Genel ilan durum başlığı
     if listing.status == "COMPLETED":
         footer = "✅ <b>İLAN TAMAMLANDI (Anlaşma Sağlandı)</b>"
+    elif listing.status == "CLOSED_DISAGREED":
+        footer = "❌ <b>İLAN ANLAŞMA SAĞLANAMADIĞI İÇİN KAPATILDI</b>"
     elif listing.status == "CANCELLED_TIMEOUT":
         footer = "⚠️ <b>İLAN İPTAL EDİLDİ (30 Dk Kuralı İhlali)</b>"
     elif listing.status == "CANCELLED_ADMIN":

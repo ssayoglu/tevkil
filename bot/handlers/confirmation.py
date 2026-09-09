@@ -345,12 +345,10 @@ async def handle_reason_selected(callback: CallbackQuery, db: AsyncSession):
         )
         await AuditService.notify_admin_event(callback.bot, admin_alert)
 
-    # İlanı veritabanından yeniden çek ve panoyu güncelle
+    # İlanı veritabanından çek
     l_stmt = select(Listing).where(Listing.id == listing_id)
     l_res = await db.execute(l_stmt)
     listing = l_res.scalar_one_or_none()
-    if listing:
-        await update_group_listing_board(callback.bot, listing, db=db)
 
     # ŞARTNAME KURALI:
     # "Sebep 'Ücret' harici seçildiğinde otomatik olarak sıradaki kişiye
@@ -412,14 +410,26 @@ async def handle_reason_selected(callback: CallbackQuery, db: AsyncSession):
             except Exception as e:
                 print(f"[Confirmation] Sıradaki adaya DM bildirimi iletilemedi: {e}")
         else:
-            # Yedek aday yok
+            # Yedek aday yok -> İlanı anlaşmazlık nedeniyle kapat
+            if listing:
+                listing.status = "CLOSED_DISAGREED"
+                await db.commit()
+
             try:
                 await callback.bot.send_message(
                     chat_id=session.creator_id,
-                    text=f"ℹ️ #{listing_id} numaralı ilanınız için yedek sırada başka aday bulunmamaktadır."
+                    text=f"ℹ️ #{listing_id} numaralı ilanınız için görüşme sonlandırıldı ve yedek sırada başka aday bulunmadığından ilan kapatıldı."
                 )
             except Exception:
                 pass
+    else:
+        # Ücret anlaşmazlığında kural: Sıradaki adaya geçilmez, ilan kapatılır
+        if listing:
+            listing.status = "CLOSED_DISAGREED"
+            await db.commit()
+
+    if listing:
+        await update_group_listing_board(callback.bot, listing, db=db)
 
 
 @router.callback_query(F.data.startswith("next_offer:"))
@@ -469,7 +479,6 @@ async def handle_next_offer(callback: CallbackQuery, db: AsyncSession):
         )
         await db.execute(app_stmt)
         await db.commit()
-        await update_group_listing_board(callback.bot, listing, db=db)
 
         # Zincirleme devir: Sıradaki bir sonraki adaya git (target_rank + 1)
         next_candidate = await RedisQueueService.get_next_available_applicant(listing_id, current_rank=target_rank)
@@ -489,11 +498,17 @@ async def handle_next_offer(callback: CallbackQuery, db: AsyncSession):
                 )
             except Exception as e:
                 print(f"[Confirmation] Zincirleme sıradaki adaya teklif iletilemedi: {e}")
+            await update_group_listing_board(callback.bot, listing, db=db)
         else:
+            if listing:
+                listing.status = "CLOSED_DISAGREED"
+                await db.commit()
             try:
                 await callback.bot.send_message(
                     chat_id=listing.creator_id,
-                    text=f"ℹ️ #{listing_id} numaralı ilanınız için sıradaki adaylar teklifi reddetti ve yedek sırada başka aday kalmadı."
+                    text=f"ℹ️ #{listing_id} numaralı ilanınız için sıradaki adaylar teklifi reddetti ve yedek sırada başka aday kalmadığından ilan kapatıldı."
                 )
             except Exception:
                 pass
+            if listing:
+                await update_group_listing_board(callback.bot, listing, db=db)
