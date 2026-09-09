@@ -1,7 +1,7 @@
 import re
 from datetime import datetime, timedelta
 from aiogram import Router, F
-from aiogram.types import Message
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.filters import Command
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
@@ -428,6 +428,128 @@ async def render_user_profile_dossier(user: User, db: AsyncSession) -> str:
     )
 
 
+def build_user_admin_keyboard(user_id: int, is_banned: bool = False) -> InlineKeyboardMarkup:
+    if is_banned:
+        buttons = [
+            [
+                InlineKeyboardButton(text="✅ Kısıtlamayı Kaldır", callback_data=f"adm_act:unban:{user_id}")
+            ],
+            [
+                InlineKeyboardButton(text="⚠️ +10 Ceza Puanı", callback_data=f"adm_act:penalty:{user_id}:10"),
+                InlineKeyboardButton(text="⭐ +5 Rank Puanı", callback_data=f"adm_act:rank:{user_id}:5")
+            ]
+        ]
+    else:
+        buttons = [
+            [
+                InlineKeyboardButton(text="⛔ 5 Gün Uzaklaştır", callback_data=f"adm_act:ban:{user_id}:5"),
+                InlineKeyboardButton(text="🚨 15 Gün (Tarife Cezası)", callback_data=f"adm_act:ban:{user_id}:15")
+            ],
+            [
+                InlineKeyboardButton(text="⚠️ +10 Ceza Puanı", callback_data=f"adm_act:penalty:{user_id}:10"),
+                InlineKeyboardButton(text="⭐ +5 Rank Puanı", callback_data=f"adm_act:rank:{user_id}:5")
+            ]
+        ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+@router.callback_query(F.data.startswith("adm_act:"))
+async def handle_admin_action_callback(callback: CallbackQuery, db: AsyncSession):
+    if callback.message.chat.id != settings.admin_chat_id:
+        await callback.answer("⚠️ Bu butonlar sadece Admin Grubunda geçerlidir.", show_alert=True)
+        return
+
+    parts = callback.data.split(":")
+    action = parts[1]
+    target_uid = int(parts[2])
+    val = int(parts[3]) if len(parts) >= 4 and parts[3].isdigit() else 0
+
+    u_stmt = select(User).where(User.id == target_uid)
+    res = await db.execute(u_stmt)
+    user = res.scalar_one_or_none()
+
+    if not user:
+        await callback.answer("❌ Kullanıcı bulunamadı.", show_alert=True)
+        return
+
+    admin_name = callback.from_user.full_name or f"Admin {callback.from_user.id}"
+
+    if action == "ban":
+        days = val if val > 0 else 5
+        ban_until = datetime.utcnow() + timedelta(days=days)
+        user.is_banned = True
+        user.banned_until = ban_until
+        user.ban_reason = f"Yönetici ({admin_name}) tarafından {days} gün uzaklaştırıldı"
+        user.penalty_points += 20
+
+        penalty_log = PenaltyLog(
+            user_id=target_uid,
+            points=20,
+            reason=f"Admin panelinden {days} gün uzaklaştırma",
+            issued_by=f"ADMIN_{callback.from_user.id}"
+        )
+        db.add(penalty_log)
+        await db.commit()
+        await RedisQueueService.remove_active_bridge(target_uid)
+
+        # Kullanıcıya tebligat
+        try:
+            await callback.bot.send_message(
+                chat_id=target_uid,
+                text=(
+                    f"⛔ <b>Sistemden Uzaklaştırıldınız</b>\n\n"
+                    f"Hesabınız yöneticiler tarafından <b>{days} gün</b> süreyle sistemden uzaklaştırılmıştır.\n"
+                    f"<b>Bitiş:</b> {format_date_short_tr(ban_until)}"
+                ),
+                parse_mode="HTML"
+            )
+        except Exception:
+            pass
+
+        await callback.answer(f"✅ {user.full_name} ({target_uid}) {days} gün uzaklaştırıldı!", show_alert=True)
+
+    elif action == "unban":
+        user.is_banned = False
+        user.banned_until = None
+        user.ban_reason = None
+        await db.commit()
+
+        try:
+            await callback.bot.send_message(
+                chat_id=target_uid,
+                text="✅ Sistem kısıtlamanız yöneticiler tarafından kaldırılmıştır."
+            )
+        except Exception:
+            pass
+
+        await callback.answer(f"✅ {user.full_name} ({target_uid}) kısıtlaması kaldırıldı!", show_alert=True)
+
+    elif action == "penalty":
+        pts = val if val > 0 else 10
+        await RankService.add_penalty_points(
+            user_id=target_uid,
+            points=pts,
+            reason="Admin panelinden manuel ceza puanı",
+            issued_by=f"ADMIN_{callback.from_user.id}",
+            db=db
+        )
+        await callback.answer(f"✅ {user.full_name} ({target_uid}) hesabına +{pts} ceza puanı uygulandı!", show_alert=True)
+
+    elif action == "rank":
+        pts = val if val > 0 else 5
+        user.rank_score += pts
+        await db.commit()
+        await callback.answer(f"⭐ {user.full_name} ({target_uid}) hesabına +{pts} rank puanı eklendi!", show_alert=True)
+
+    # İlgili mesaj bir dosya kartı ise kartı güncelleyelim
+    try:
+        new_dossier = await render_user_profile_dossier(user, db)
+        new_kb = build_user_admin_keyboard(user.id, is_banned=user.is_banned)
+        await callback.message.edit_text(new_dossier, reply_markup=new_kb, parse_mode="HTML")
+    except Exception:
+        pass
+
+
 @router.message(Command("kimdir", "kullanici_bilgi", "ihlal", "profil"))
 async def cmd_user_info(message: Message, db: AsyncSession):
     if not is_admin_chat(message):
@@ -455,7 +577,8 @@ async def cmd_user_info(message: Message, db: AsyncSession):
         return
 
     dossier = await render_user_profile_dossier(user, db)
-    await message.reply(dossier, parse_mode="HTML")
+    kb = build_user_admin_keyboard(user.id, is_banned=user.is_banned)
+    await message.reply(dossier, reply_markup=kb, parse_mode="HTML")
 
 
 async def find_user_by_query(query_str: str, db: AsyncSession) -> User:
@@ -521,7 +644,8 @@ async def handle_admin_natural_query(message: Message, db: AsyncSession):
         return
 
     dossier = await render_user_profile_dossier(user, db)
-    await message.reply(dossier, parse_mode="HTML")
+    kb = build_user_admin_keyboard(user.id, is_banned=user.is_banned)
+    await message.reply(dossier, reply_markup=kb, parse_mode="HTML")
 
 
 @router.message(Command("ilan_detay"))

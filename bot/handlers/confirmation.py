@@ -45,6 +45,20 @@ def get_next_candidate_keyboard(listing_id: int, current_rank: int) -> InlineKey
     return InlineKeyboardMarkup(inline_keyboard=kb)
 
 
+def get_disagreement_admin_keyboard(creator_id: int, applicant_id: int) -> InlineKeyboardMarkup:
+    buttons = [
+        [
+            InlineKeyboardButton(text="⛔ Adayı Uzaklaştır (5G)", callback_data=f"adm_act:ban:{applicant_id}:5"),
+            InlineKeyboardButton(text="⛔ İlan Sahibini Uzaklaştır (5G)", callback_data=f"adm_act:ban:{creator_id}:5")
+        ],
+        [
+            InlineKeyboardButton(text="⚠️ Adaya +10 Ceza", callback_data=f"adm_act:penalty:{applicant_id}:10"),
+            InlineKeyboardButton(text="⚠️ İlan Sahibine +10 Ceza", callback_data=f"adm_act:penalty:{creator_id}:10")
+        ]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
 @router.callback_query(F.data.startswith("agree:"))
 async def handle_agree(callback: CallbackQuery, db: AsyncSession):
     listing_id = int(callback.data.split(":")[1])
@@ -404,11 +418,13 @@ async def handle_reason_selected(callback: CallbackQuery, db: AsyncSession):
             f"👤 <b>Başvuran ({current_candidate_rank}. Sıra Aday):</b> <code>{session.applicant_id}</code> (Onay: {'✅ Onayladı' if session.applicant_agreed else '❌ Onaylamadı'})\n"
             f"📌 <b>Anlaşmazlık Bildiren:</b> {reporter_title} (ID: <code>{callback.from_user.id}</code>)\n"
             f"📝 <b>Bildirilen Gerekçe:</b> <b>{reason_text}</b>\n\n"
-            f"🛠️ <b>Admin Müdahalesi:</b>\n"
-            f"• Uzaklaştır: <code>/kullanici_uzaklastir {violator_id} 5</code>\n"
-            f"• Ceza Puanı: <code>/ceza_puani_ver {violator_id} 10 Anlaşmazlık ihlali</code>"
+            f"👇 <i>Aşağıdaki hızlı işlem butonlarını kullanarak müdahale edebilirsiniz:</i>"
         )
-        await AuditService.notify_admin_event(callback.bot, admin_alert)
+        await AuditService.notify_admin_event(
+            callback.bot,
+            admin_alert,
+            reply_markup=get_disagreement_admin_keyboard(session.creator_id, session.applicant_id)
+        )
 
     # İlanı veritabanından çek
     l_stmt = select(Listing).where(Listing.id == listing_id)

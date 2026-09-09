@@ -96,7 +96,7 @@ class AuditService:
             print(f"[AuditService] DB log kaydetme hatası: {db_err}")
 
     @staticmethod
-    async def notify_admin_event(bot: Bot, text: str):
+    async def notify_admin_event(bot: Bot, text: str, reply_markup=None):
         """
         Önemli sistem olaylarını (anlaşma, anlaşmazlık, kısıtlama, zaman aşımı) admin grubuna bildirir.
         """
@@ -104,6 +104,7 @@ class AuditService:
             await bot.send_message(
                 chat_id=settings.admin_chat_id,
                 text=text,
+                reply_markup=reply_markup,
                 parse_mode="HTML"
             )
         except Exception as e:
