@@ -118,4 +118,46 @@ async def test_cmd_test_help():
     assert "TEST REHBERİ" in reply_text
     assert "/sifirla" in reply_text
     assert "#12 log" in reply_text
-    assert "@kullanici kimdir" in reply_text
+
+
+@pytest.mark.asyncio
+async def test_find_user_by_query():
+    from bot.handlers.admin_panel import find_user_by_query
+    from bot.database.models import User
+
+    mock_db = AsyncMock()
+    user = User(id=12345, full_name="Av. Test", username="testuser")
+
+    res = MagicMock()
+    res.scalar_one_or_none.return_value = user
+    mock_db.execute.return_value = res
+
+    # 1. By ID
+    found = await find_user_by_query("12345", mock_db)
+    assert found == user
+
+    # 2. By Username with @
+    found_u = await find_user_by_query("@testuser", mock_db)
+    assert found_u == user
+
+
+@pytest.mark.asyncio
+async def test_handle_admin_natural_query_stats():
+    from bot.handlers.admin_panel import handle_admin_natural_query
+    settings.admin_chat_id = -1001234567890
+
+    mock_db = AsyncMock()
+    count_res = MagicMock()
+    count_res.scalar.return_value = 10
+    mock_db.execute.return_value = count_res
+
+    message = MagicMock(spec=Message)
+    message.chat = Chat(id=-1001234567890, type="supergroup")
+    message.text = "istatistik"
+    message.reply = AsyncMock()
+
+    await handle_admin_natural_query(message, mock_db)
+    assert message.reply.called
+    reply_text = message.reply.call_args[0][0]
+    assert "SİSTEM İSTATİSTİKLERİ" in reply_text
+

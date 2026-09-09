@@ -138,16 +138,22 @@ async def get_active_sessions_text(db: AsyncSession) -> str:
 
 def render_test_commands_guide() -> str:
     return (
-        "🧪 <b>TEST REHBERİ VE YÖNETİM KOMUTLARI</b>\n\n"
+        "🧪 <b>TEST REHBERİ VE HIZLI YÖNETİM KOMUTLARI</b>\n\n"
+        "🕵️ <b>Hızlı Kullanıcı & ID Sorgulama (Doğal Sorgu):</b>\n"
+        "• <code>kim 123456789</code> veya <code>@kullanici kim</code>\n"
+        "• <code>nedir 123456789</code> veya <code>@kullanici nedir</code>\n"
+        "• <code>id 123456789</code> veya <code>id @kullanici</code>\n"
+        "• <code>/kim &lt;ID/@user&gt;</code> veya <code>/id &lt;ID&gt;</code>\n"
+        "  <i>(Bir admin uyarısına yanıt olarak sadece 'kim', 'nedir' veya 'id' yazabilirsiniz.)</i>\n\n"
+        "📊 <b>İstatistikler:</b>\n"
+        "• <code>istatistik</code> veya <code>/istatistik</code>\n"
+        "  <i>Sistem geneli toplam kullanıcı, ilan ve başarı metriklerini döker.</i>\n\n"
+        "📜 <b>İlan Denetim ve Mesaj Logları:</b>\n"
+        "• <code>#12 log</code>, <code>#12 nedir</code> veya <code>/log 12</code>\n"
+        "  <i>İlanın tüm mesajlaşma geçmişini ve yetki belgelerini döker (3 ay saklanır).</i>\n\n"
         "🧹 <b>Kısıtları ve Oturumları Sıfırlama:</b>\n"
         "• <code>/sifirla</code> veya <code>/tum_kisitlari_kaldir</code>\n"
         "  <i>Tüm kullanıcıların banlarını, ceza puanlarını sıfırlar, köprü oturumlarını temizler.</i>\n\n"
-        "📜 <b>İlan Denetim ve Mesaj Logları:</b>\n"
-        "• <code>#12 log</code> veya <code>/log 12</code>\n"
-        "  <i>İlanın tüm mesajlaşma geçmişini ve yetki belgelerini döker (3 ay saklanır).</i>\n\n"
-        "🕵️ <b>Kullanıcı Dosyası Sorgulama:</b>\n"
-        "• <code>@kullanici kimdir</code> veya <code>/kimdir @kullanici</code>\n"
-        "  <i>Kullanıcının güven puanını, ceza geçmişini ve baro kaydını gösterir.</i>\n\n"
         "👥 <b>Kuyruk ve İlan Detayı:</b>\n"
         "• <code>/ilan_detay &lt;ilan_id&gt;</code>\n"
         "  <i>Başvuru sırasını, milisaniye skorlarını ve durumunu listeler.</i>\n\n"
@@ -158,10 +164,9 @@ def render_test_commands_guide() -> str:
         "• <code>/ceza_kaldir &lt;user_id&gt;</code> — Kısıtlamayı kaldırır.\n"
         "• <code>/ceza_puani_ver &lt;user_id&gt; &lt;puan&gt;</code> — Ceza puanı ekler.\n"
         "• <code>/puan_ekle &lt;user_id&gt; &lt;puan&gt;</code> — Rank puanı ekler.\n\n"
-        "📊 <b>Genel Listeler ve Durum:</b>\n"
+        "📋 <b>Genel Listeler ve Durum:</b>\n"
         "• <code>/aktif_ilanlar</code> — Devam eden görüşmeler.\n"
-        "• <code>/kara_liste</code> — Yasaklı kullanıcılar.\n"
-        "• <code>/istatistik</code> — Sistem geneli istatistikler."
+        "• <code>/kara_liste</code> — Yasaklı kullanıcılar."
     )
 
 
@@ -180,12 +185,14 @@ async def cmd_admin_help(message: Message):
 
     text = (
         "🛠️ <b>ADMİN DENETİM PANELİ KOMUTLARI</b>\n\n"
+        "• <code>kim &lt;ID/@user&gt;</code> veya <code>id &lt;ID&gt;</code> veya <code>nedir &lt;ID/@user&gt;</code>\n"
+        "  Kullanıcının güven puanını, ceza geçmişini ve baro levha kaydını getirir.\n\n"
+        "• <code>istatistik</code> veya <code>/istatistik</code>\n"
+        "  Sistem geneli toplam tevkil, kullanıcı ve ceza istatistiklerini raporlar.\n\n"
+        "• <code>#x log</code> veya <code>#x nedir</code> veya <code>/log &lt;ilan_id&gt;</code>\n"
+        "  İlanın tüm mesaj ve denetim loglarını döker (Loglar 3 ay / 90 gün saklanır).\n\n"
         "• <code>!test</code> veya <code>/test</code>\n"
         "  Test süresince kullanabileceğiniz tüm test ve yönetim komutlarını listeler.\n\n"
-        "• <code>#x log</code> veya <code>/log &lt;ilan_id&gt;</code>\n"
-        "  İlanın tüm mesaj ve denetim loglarını döker (Loglar 3 ay / 90 gün saklanır).\n\n"
-        "• <code>@kullanici kimdir</code> veya <code>/kimdir &lt;user_id&gt;</code>\n"
-        "  Kullanıcının kimlik, rank, ceza, baro ve ihlal geçmişini gösterir.\n\n"
         "• <code>/tum_kisitlari_kaldir</code> (veya <code>/sifirla</code>)\n"
         "  Test modunda tüm kullanıcıların kısıtlamalarını ve aktif köprü oturumlarını anında sıfırlar.\n\n"
         "• <code>/durdur &lt;ilan_id&gt;</code>\n"
@@ -205,9 +212,7 @@ async def cmd_admin_help(message: Message):
         "• <code>/aktif_ilanlar</code>\n"
         "  Şu anda devam eden tüm köprü oturumlarını listeler.\n\n"
         "• <code>/kara_liste</code>\n"
-        "  Aktif kısıtlı (yasaklı) tüm kullanıcıları listeler.\n\n"
-        "• <code>/istatistik</code>\n"
-        "  Sistem geneli toplam ve günlük tevkil istatistiklerini raporlar."
+        "  Aktif kısıtlı (yasaklı) tüm kullanıcıları listeler."
     )
     await message.reply(text, reply_markup=get_admin_main_keyboard(), parse_mode="HTML")
 
@@ -955,7 +960,7 @@ async def handle_admin_action_callback(callback: CallbackQuery, db: AsyncSession
         pass
 
 
-@router.message(Command("kimdir", "kullanici_bilgi", "ihlal", "profil"))
+@router.message(Command("kim", "kimdir", "nedir", "id", "whois", "user", "kullanici_bilgi", "ihlal", "profil", prefix="/!"))
 async def cmd_user_info(message: Message, db: AsyncSession):
     if not is_admin_chat(message):
         return
@@ -967,10 +972,23 @@ async def cmd_user_info(message: Message, db: AsyncSession):
         target_identifier = args[1].strip()
     elif message.reply_to_message and message.reply_to_message.from_user and not message.reply_to_message.from_user.is_bot:
         target_identifier = str(message.reply_to_message.from_user.id)
+    elif message.reply_to_message:
+        reply_txt = message.reply_to_message.text or message.reply_to_message.caption or ""
+        id_match = re.search(r"(?:ID|id|User ID):\s*<code>?(\d+)</code>?", reply_txt)
+        if id_match:
+            target_identifier = id_match.group(1)
 
     if not target_identifier:
-        await message.reply("⚠️ Kullanım: <code>/kimdir &lt;@kullanici_adi veya ID&gt;</code>", parse_mode="HTML")
+        await message.reply("⚠️ Kullanım: <code>kim &lt;@kullanici veya ID&gt;</code> veya <code>/id &lt;ID&gt;</code>", parse_mode="HTML")
         return
+
+    # Eğer sorgu #12 gibi ilan ID formatındaysa ilan dosyasını dökelim
+    if target_identifier.startswith("#") and target_identifier[1:].isdigit():
+        listing_id = int(target_identifier[1:])
+        dossier, kb = await render_listing_logs_dossier(listing_id, db)
+        if dossier:
+            await message.reply(dossier, reply_markup=kb, parse_mode="HTML")
+            return
 
     user = await find_user_by_query(target_identifier, db)
     if not user:
@@ -1009,7 +1027,7 @@ async def find_user_by_query(query_str: str, db: AsyncSession) -> User:
     return user
 
 
-@router.message(Command("log", "ilan_log", "loglar", "kayitlar"))
+@router.message(Command("log", "ilan_log", "loglar", "kayitlar", prefix="/!"))
 async def cmd_listing_logs(message: Message, db: AsyncSession):
     if not is_admin_chat(message):
         return
@@ -1047,7 +1065,13 @@ async def handle_admin_natural_query(message: Message, db: AsyncSession):
         await message.reply(guide, reply_markup=get_admin_main_keyboard(), parse_mode="HTML")
         return
 
-    # 1. "#x log", "log #x", "x log", "ilan #x log" veya reply olarak "log" yakala
+    # 1. İstatistik Sorguları (Örn: "istatistik", "istatistikler", "stats", "rapor", "durum")
+    if re.search(r"^(?:!istatistik|/istatistik|istatistik(?:ler)?|stats?|rapor|sistem\s+durumu)\b", text, re.IGNORECASE):
+        stat_text = await get_stats_text(db)
+        await message.reply(stat_text, reply_markup=get_admin_main_keyboard(), parse_mode="HTML")
+        return
+
+    # 2. "#x log", "log #x", "x log", "ilan #x log" veya reply olarak "log" yakala
     log_match = re.search(r"#(\d+)\s+log(?:lar[ıi])?", text, re.IGNORECASE)
     if not log_match:
         log_match = re.search(r"\b(?:log|loglar[ıi]|kayıtlar[ıi])\s+#?(\d+)", text, re.IGNORECASE)
@@ -1075,29 +1099,78 @@ async def handle_admin_natural_query(message: Message, db: AsyncSession):
             await message.reply(f"❌ <b>#{listing_id}</b> numaralı ilana ait kayıt bulunamadı.", parse_mode="HTML")
         return
 
-    # 2. Regex ile "@username kimdir", "username kimdir", "kimdir @username", "kimdir 123456" yakala
-    match = re.search(r"@?([a-zA-Z0-9_]+)\s+kimdir\??", text, re.IGNORECASE)
-    if not match:
-        match = re.search(r"\bkimdir\s+@?([a-zA-Z0-9_]+)\??", text, re.IGNORECASE)
+    # 3. İlan Sorgusu: "#12 nedir", "nedir #12", "#12 detay", "detay #12"
+    listing_query_match = re.search(r"#(\d+)\s+(?:nedir|detay|durum|bilgi)\??", text, re.IGNORECASE)
+    if not listing_query_match:
+        listing_query_match = re.search(r"\b(?:nedir|detay|bilgi)\s+#(\d+)\??", text, re.IGNORECASE)
 
+    if listing_query_match:
+        listing_id = int(listing_query_match.group(1))
+        dossier, kb = await render_listing_logs_dossier(listing_id, db)
+        if dossier:
+            await message.reply(dossier, reply_markup=kb, parse_mode="HTML")
+            return
+
+    # 4. Kullanıcı / ID / Kim / Nedir Sorguları
+    # Örnekler:
+    # "kim 12345678", "12345678 kim", "kim @username", "@username kim", "@username kimdir", "kimdir @username"
+    # "nedir 12345678", "12345678 nedir", "nedir @username", "@username nedir"
+    # "id 12345678", "id @username", "id: 12345678", "user 12345678"
     target_identifier = None
-    if match:
-        target_identifier = match.group(1).strip()
-    elif re.match(r"^\s*kimdir\s*\??$", text, re.IGNORECASE) and message.reply_to_message:
+
+    # a) "kim <target>" / "kimdir <target>" / "nedir <target>" / "whois <target>" / "id <target>"
+    m_prefix = re.search(r"^(?:kim|kimdir|nedir|whois|id|user|kullanıcı)\s+[:=]?\s*@?([a-zA-Z0-9_]+)\??$", text, re.IGNORECASE)
+    if m_prefix:
+        target_identifier = m_prefix.group(1)
+
+    # b) "<target> kim" / "<target> kimdir" / "<target> nedir" / "<target> kimdir acaba"
+    if not target_identifier:
+        m_suffix = re.search(r"^@?([a-zA-Z0-9_]+)\s+(?:kim|kimdir|nedir|whois)\??$", text, re.IGNORECASE)
+        if m_suffix:
+            target_identifier = m_suffix.group(1)
+
+    # c) Sadece ID (örn: "id: 123456789" veya 6-15 basamaklı saf ID gönderildiğinde)
+    if not target_identifier:
+        m_id = re.search(r"^id\s*[:=]?\s*(\d+)$", text, re.IGNORECASE)
+        if m_id:
+            target_identifier = m_id.group(1)
+        elif re.match(r"^\d{6,14}$", text):
+            target_identifier = text
+
+    # d) Bir mesaja yanıt olarak "kim", "kimdir", "nedir", "id", "whois", "bilgi" yazıldığında
+    if not target_identifier and re.match(r"^\s*(?:kim|kimdir|nedir|id|whois|bilgi|detay)\s*\??$", text, re.IGNORECASE) and message.reply_to_message:
         reply_user = message.reply_to_message.from_user
-        if reply_user and not reply_user.is_bot:
+        reply_text = message.reply_to_message.text or message.reply_to_message.caption or ""
+
+        # Mesaj metninden ID ara
+        id_match = re.search(r"(?:ID|id|User ID|Sahibi ID|Aday ID):\s*<code>?(\d+)</code>?", reply_text)
+        if id_match:
+            target_identifier = id_match.group(1)
+        elif reply_user and not reply_user.is_bot:
             target_identifier = str(reply_user.id)
         else:
-            reply_text = message.reply_to_message.text or message.reply_to_message.caption or ""
-            id_match = re.search(r"(?:ID|id|User ID):\s*<code>?(\d+)</code>?", reply_text)
-            if id_match:
-                target_identifier = id_match.group(1)
+            # Belki ilandır (#12)
+            l_match = re.search(r"(?:İlan|ilan|Listing|#)\s*#?(\d+)", reply_txt := reply_text)
+            if l_match:
+                listing_id = int(l_match.group(1))
+                dossier, kb = await render_listing_logs_dossier(listing_id, db)
+                if dossier:
+                    await message.reply(dossier, reply_markup=kb, parse_mode="HTML")
+                    return
 
     if not target_identifier:
         return
 
+    # Kullanıcıyı DB'de ara
     user = await find_user_by_query(target_identifier, db)
     if not user:
+        # Eğer sadece sayıysa ve belki ilan ID'sidir kontrol edelim
+        if target_identifier.isdigit() and int(target_identifier) < 10000:
+            dossier, kb = await render_listing_logs_dossier(int(target_identifier), db)
+            if dossier:
+                await message.reply(dossier, reply_markup=kb, parse_mode="HTML")
+                return
+
         await message.reply(
             f"❌ <b>'{target_identifier}'</b> sorgusuna ait sistemde kayıtlı kullanıcı bulunamadı.",
             parse_mode="HTML"
@@ -1109,7 +1182,7 @@ async def handle_admin_natural_query(message: Message, db: AsyncSession):
     await message.reply(dossier, reply_markup=kb, parse_mode="HTML")
 
 
-@router.message(Command("ilan_detay"))
+@router.message(Command("ilan_detay", prefix="/!"))
 async def cmd_listing_detail(message: Message, db: AsyncSession):
     if not is_admin_chat(message):
         return
@@ -1129,7 +1202,7 @@ async def cmd_listing_detail(message: Message, db: AsyncSession):
     await message.reply(queue_text, parse_mode="HTML")
 
 
-@router.message(Command("aktif_ilanlar"))
+@router.message(Command("aktif_ilanlar", prefix="/!"))
 async def cmd_list_active(message: Message, db: AsyncSession):
     if not is_admin_chat(message):
         return
@@ -1138,7 +1211,7 @@ async def cmd_list_active(message: Message, db: AsyncSession):
     await message.reply(text, reply_markup=get_admin_main_keyboard(), parse_mode="HTML")
 
 
-@router.message(Command("kara_liste"))
+@router.message(Command("kara_liste", prefix="/!"))
 async def cmd_ban_list(message: Message, db: AsyncSession):
     if not is_admin_chat(message):
         return
@@ -1147,7 +1220,7 @@ async def cmd_ban_list(message: Message, db: AsyncSession):
     await message.reply(text, reply_markup=get_admin_main_keyboard(), parse_mode="HTML")
 
 
-@router.message(Command("istatistik", "stats"))
+@router.message(Command("istatistik", "istatistikler", "stats", "stat", "rapor", prefix="/!"))
 async def cmd_stats(message: Message, db: AsyncSession):
     if not is_admin_chat(message):
         return
