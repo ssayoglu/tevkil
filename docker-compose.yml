@@ -1,0 +1,56 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: tevkil_postgres
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-tevkil_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-tevkil_secret_pass}
+      POSTGRES_DB: ${POSTGRES_DB:-tevkil_db}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-tevkil_user} -d ${POSTGRES_DB:-tevkil_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: tevkil_redis
+    restart: always
+    command: redis-server --appendonly yes
+    volumes:
+      - redisdata:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  bot:
+    build: .
+    container_name: tevkil_bot
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file:
+      - .env
+    volumes:
+      - ./logs:/app/logs
+    environment:
+      - POSTGRES_HOST=postgres
+      - REDIS_HOST=redis
+
+volumes:
+  pgdata:
+  redisdata:
