@@ -95,42 +95,8 @@ class BridgeService:
             group_id=group_id
         )
 
-        # 1. Ana Grupta "Görüşme Başladı / İlan Sahibine Yaz" Duyurusu ve Butonları
-        if group_id:
-            try:
-                group_contact_kb = InlineKeyboardMarkup(
-                    inline_keyboard=[
-                        [
-                            InlineKeyboardButton(
-                                text="💬 İlan Sahibine Yaz (1. Sıra Aday)",
-                                url=f"https://t.me/Tevkil_Denetim_Merkezi_bot?start=chat_{listing_id}"
-                            )
-                        ],
-                        [
-                            InlineKeyboardButton(
-                                text="💼 Adayla Görüş (İlan Sahibi)",
-                                url=f"https://t.me/Tevkil_Denetim_Merkezi_bot?start=chat_{listing_id}"
-                            )
-                        ]
-                    ]
-                )
-                await bot.send_message(
-                    chat_id=group_id,
-                    text=(
-                        f"📢 <b>[BAŞVURU ALINDI — İlan #{listing_id}]</b>\n\n"
-                        f"🟢 <b>{candidate_rank}. sıradaki meslektaşımız</b> ilana başvurdu ve görüşme hakkı kazandı.\n\n"
-                        f"👇 <b>Görüşmeyi Başlatmak İçin:</b>\n"
-                        f"• <b>1. Sıradaki Aday:</b> <code>İlan Sahibine Yaz</code> butonuna tıklayınız.\n"
-                        f"• <b>İlan Sahibi:</b> <code>Adayla Görüş</code> butonuna tıklayınız.\n\n"
-                        f"<i>(Görüşmeler bot üzerinden anonim ve güvenli olarak yürütülür.)</i>"
-                    ),
-                    reply_markup=group_contact_kb,
-                    parse_mode="HTML"
-                )
-            except Exception as e:
-                print(f"[BridgeService] Gruba görüşme başladı duyurusu iletilemedi: {e}")
-
-        # 2. İlan Sahibine DM Bildirimi
+        # 1. Bildirimler sadece taraflara özelden (DM) gönderilir (Grup mesaj geçmişi temiz tutulur)
+        # İlan Sahibine DM Bildirimi
         try:
             await bot.send_message(
                 chat_id=creator_id,
