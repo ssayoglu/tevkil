@@ -91,18 +91,6 @@ def build_apply_keyboard(listing_id: int) -> InlineKeyboardMarkup:
                     text="📋 Başvur (Sıraya Gir)",
                     callback_data=f"apply:{listing_id}"
                 )
-            ],
-            [
-                InlineKeyboardButton(
-                    text="💬 İlan Sahibine Yaz (1. Sıra Aday)",
-                    url=f"https://t.me/Tevkil_Denetim_Merkezi_bot?start=chat_{listing_id}"
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text="💼 Adayla Görüş (İlan Sahibi)",
-                    url=f"https://t.me/Tevkil_Denetim_Merkezi_bot?start=chat_{listing_id}"
-                )
             ]
         ]
     )

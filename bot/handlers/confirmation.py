@@ -361,6 +361,42 @@ async def handle_reason_selected(callback: CallbackQuery, db: AsyncSession):
         next_candidate = await RedisQueueService.get_next_available_applicant(listing_id, current_rank=current_candidate_rank)
         if next_candidate:
             next_uid, next_score, new_rank = next_candidate
+
+            # Aday bilgilerini çek (etiketlemek için)
+            cand_stmt = select(User).where(User.id == next_uid)
+            cand_res = await db.execute(cand_stmt)
+            cand_user = cand_res.scalar_one_or_none()
+
+            cand_mention = f"@{cand_user.username}" if (cand_user and cand_user.username) else (f"<a href='tg://user?id={next_uid}'>{cand_user.full_name if cand_user else 'Meslektaşımız'}</a>")
+
+            # 1. Ana grupta 2. kişiyi etiketleyerek bildirim yayınla
+            if listing and listing.group_id:
+                try:
+                    next_cand_group_kb = InlineKeyboardMarkup(
+                        inline_keyboard=[
+                            [
+                                InlineKeyboardButton(
+                                    text="💬 İlan Sahibine Yaz (Görüşmeyi Başlat)",
+                                    url=f"https://t.me/Tevkil_Denetim_Merkezi_bot?start=chat_{listing_id}"
+                                )
+                            ]
+                        ]
+                    )
+                    await callback.bot.send_message(
+                        chat_id=listing.group_id,
+                        text=(
+                            f"📢 <b>[SIRA SİZE GELDİ — İlan #{listing_id}]</b>\n\n"
+                            f"🔔 Sayın {cand_mention}:\n"
+                            f"Önceki meslektaşımız ile anlaşma sağlanamadığından <b>{new_rank}. sıradaki aday olarak görüşme hakkı size geçmiştir!</b>\n\n"
+                            f"👇 İlan sahibi ile görüşmeye başlamak için lütfen aşağıdaki butona tıklayınız:"
+                        ),
+                        reply_markup=next_cand_group_kb,
+                        parse_mode="HTML"
+                    )
+                except Exception as e:
+                    print(f"[Confirmation] Gruba sıradaki aday etiket bildirimi gönderilemedi: {e}")
+
+            # 2. DM'den de onay mesajı gönder
             try:
                 await callback.bot.send_message(
                     chat_id=next_uid,
@@ -374,7 +410,7 @@ async def handle_reason_selected(callback: CallbackQuery, db: AsyncSession):
                     parse_mode="HTML"
                 )
             except Exception as e:
-                print(f"[Confirmation] Sıradaki adaya bildirim iletilemedi: {e}")
+                print(f"[Confirmation] Sıradaki adaya DM bildirimi iletilemedi: {e}")
         else:
             # Yedek aday yok
             try:
