@@ -311,12 +311,22 @@ async def send_welcome_and_onboarding(bot, chat_id: int, new_user, db: AsyncSess
     )
 
     try:
-        await bot.send_message(
+        welcome_msg = await bot.send_message(
             chat_id=chat_id,
             text=group_welcome_text,
             reply_markup=group_kb,
             parse_mode="HTML"
         )
+        # 30 saniye sonra gruptaki karşılama panosunu sil (Grup temiz kalsın)
+        async def _del_welcome():
+            import asyncio
+            await asyncio.sleep(30)
+            try:
+                await bot.delete_message(chat_id=chat_id, message_id=welcome_msg.message_id)
+            except Exception:
+                pass
+        import asyncio
+        asyncio.create_task(_del_welcome())
     except Exception as e:
         print(f"[GroupDetector] Grupta hoş geldin mesajı gönderilemedi: {e}")
 

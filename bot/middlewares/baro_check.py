@@ -1,3 +1,4 @@
+import asyncio
 from typing import Callable, Dict, Any, Awaitable
 from aiogram import BaseMiddleware
 from aiogram.types import Message, TelegramObject, ChatPermissions, InlineKeyboardMarkup, InlineKeyboardButton
@@ -6,11 +7,20 @@ from bot.config import settings
 from bot.database.models import User
 
 
+async def _delete_message_after_delay(bot, chat_id: int, message_id: int, delay_sec: int = 15):
+    """Belirtilen süre sonunda mesajı gruptan otomatik siler."""
+    await asyncio.sleep(delay_sec)
+    try:
+        await bot.delete_message(chat_id=chat_id, message_id=message_id)
+    except Exception:
+        pass
+
+
 class BaroVerificationMiddleware(BaseMiddleware):
     """
     Tevkil gruplarında mesaj gönderen üyelerin Baro Levha Doğrulamasını denetler.
-    Doğrulanmamış kullanıcıların mesajını siler, grupta susturur ve botu başlatıp
-    doğrulama yapmaları için yönlendirici buton yayınlar.
+    Doğrulanmamış kullanıcıların mesajını anında siler, grupta susturur ve
+    doğrulama uyarısını doğrudan kullanıcının ÖZEL DM'ine gönderir.
     """
 
     async def __call__(
@@ -56,11 +66,11 @@ class BaroVerificationMiddleware(BaseMiddleware):
 
         # Kullanıcı kayıtlı değilse veya Baro doğrulaması onaylanmamışsa
         if not db_user or not db_user.is_baro_verified:
-            # 1. Yetkisiz mesajı gruptan sil
+            # 1. Yetkisiz mesajı gruptan ANINDA sil (Kimse görmesin)
             try:
                 await event.delete()
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[BaroMiddleware] Mesaj silinemedi: {e}")
 
             # 2. Grupta susturmayı uygula
             try:
@@ -77,37 +87,68 @@ class BaroVerificationMiddleware(BaseMiddleware):
             except Exception:
                 pass
 
-            # 3. Yönlendirici Buton ve Uyarı Gönder
             bot_info = await event.bot.get_me()
             bot_username = bot_info.username or "Tevkil_Denetim_Merkezi_bot"
             deep_link = f"https://t.me/{bot_username}?start=baro_verify"
 
-            user_mention = f"@{user.username}" if user.username else f"<a href='tg://user?id={user.id}'>{user.full_name or 'Meslektaşımız'}</a>"
-
-            kb = InlineKeyboardMarkup(inline_keyboard=[
-                [
-                    InlineKeyboardButton(
-                        text="⚖️ Botu Başlat & Avukat Doğrulaması Yap 🎖️",
-                        url=deep_link
-                    )
-                ]
-            ])
-
-            warn_text = (
-                f"🔒 <b>Sayın {user_mention},</b>\n\n"
-                f"🏛️ Grubumuzda mesaj gönderebilmek ve tevkil ilanlarına katılabilmek için <b>Baro Levha Doğrulaması</b> yapmanız zorunludur.\n\n"
-                f"👇 <i>Lütfen aşağıdaki butona tıklayarak botu başlatınız ve kaydınızı doğrulayınız (Onaylandığında mesaj gönderme yetkiniz otomatik açılacaktır):</i>"
-            )
-
+            # 3. ÖNCELİKLE Kullanıcıya Özelden (DM) Gönder
+            dm_sent = False
             try:
+                dm_kb = InlineKeyboardMarkup(inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text="⚖️ Botu Başlat & Baro Kaydını Doğrula 🎖️",
+                            url=deep_link
+                        )
+                    ]
+                ])
+                dm_text = (
+                    f"🔒 <b>Sayın {user.full_name or 'Meslektaşımız'},</b>\n\n"
+                    f"🏛️ Hukuk Tevkil grubumuzda mesaj gönderebilmek ve ilanlara başvurabilmek için "
+                    f"<b>Baro Levha Doğrulaması</b> yapmanız gerekmektedir.\n\n"
+                    f"Grup düzeni gereği gruptaki mesajınız silinmiştir.\n\n"
+                    f"👇 <i>Lütfen aşağıdaki butona tıklayarak kaydınızı doğrulayınız (Onaylandığında mesaj gönderme yetkiniz otomatik açılacaktır):</i>"
+                )
                 await event.bot.send_message(
-                    chat_id=event.chat.id,
-                    text=warn_text,
-                    reply_markup=kb,
+                    chat_id=user.id,
+                    text=dm_text,
+                    reply_markup=dm_kb,
                     parse_mode="HTML"
                 )
-            except Exception as e:
-                print(f"[BaroMiddleware] Grupta baro uyarı mesajı gönderilemedi: {e}")
+                dm_sent = True
+            except Exception:
+                dm_sent = False
+
+            # 4. Eğer DM gönderilemediyse (Kullanıcı botu hiç başlatmamışsa):
+            # Grupta kullanıcıyı etiketleyip tek seferlik buton at, 10 saniye sonra bu uyarıyı da gruptan sil.
+            if not dm_sent:
+                user_mention = f"@{user.username}" if user.username else f"<a href='tg://user?id={user.id}'>{user.full_name or 'Meslektaşımız'}</a>"
+                kb = InlineKeyboardMarkup(inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text="⚖️ Botu Başlat & Avukat Doğrulaması Yap 🎖️",
+                            url=deep_link
+                        )
+                    ]
+                ])
+
+                warn_text = (
+                    f"🔒 <b>Sayın {user_mention},</b>\n\n"
+                    f"🏛️ Grubumuzda mesaj gönderebilmek için <b>Baro Levha Doğrulaması</b> yapmanız gerekmektedir.\n\n"
+                    f"👇 <i>Lütfen aşağıdaki butona tıklayarak botu başlatınız ve kaydınızı doğrulayınız:</i>\n\n"
+                    f"⏱️ <i>(Bu bilgilendirme mesajı 10 saniye sonra otomatik silinecektir.)</i>"
+                )
+
+                try:
+                    warn_msg = await event.bot.send_message(
+                        chat_id=event.chat.id,
+                        text=warn_text,
+                        reply_markup=kb,
+                        parse_mode="HTML"
+                    )
+                    asyncio.create_task(_delete_message_after_delay(event.bot, event.chat.id, warn_msg.message_id, delay_sec=10))
+                except Exception as e:
+                    print(f"[BaroMiddleware] Grupta baro uyarı mesajı gönderilemedi: {e}")
 
             return  # Handler zincirini kes, mesaj işlenmesin
 
