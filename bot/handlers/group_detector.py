@@ -294,7 +294,7 @@ async def send_welcome_and_onboarding(bot, chat_id: int, new_user, db: AsyncSess
     group_kb = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(
-                text="🤖 Tevkil Botunu Başlat & Baro Doğrula 🎖️",
+                text="⚖️ Botu Başlat & Avukat Doğrulaması Yap 🎖️",
                 url=deep_link
             )
         ]

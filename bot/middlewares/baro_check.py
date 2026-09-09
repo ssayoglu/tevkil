@@ -87,7 +87,7 @@ class BaroVerificationMiddleware(BaseMiddleware):
             kb = InlineKeyboardMarkup(inline_keyboard=[
                 [
                     InlineKeyboardButton(
-                        text="🤖 Botu Başlat & Baro Kaydını Doğrula 🎖️",
+                        text="⚖️ Botu Başlat & Avukat Doğrulaması Yap 🎖️",
                         url=deep_link
                     )
                 ]
