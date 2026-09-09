@@ -261,6 +261,137 @@ async def handle_disagree_prompt(callback: CallbackQuery, db: AsyncSession):
         print(f"[Confirmation] disagree edit_text hatası: {e}")
 
 
+async def get_next_backup_candidate(listing_id: int, current_rank: int, db: AsyncSession):
+    """
+    Sıradaki adayı (current_rank sonrası) önce Redis'ten, bulunamazsa PostgreSQL Application tablosundan bulur.
+    Dönüş: (user_id, score_ms, queue_number)
+    """
+    try:
+        cand = await RedisQueueService.get_next_available_applicant(listing_id, current_rank=current_rank)
+        if cand:
+            return cand
+    except Exception:
+        pass
+
+    stmt = (
+        select(Application)
+        .where(
+            Application.listing_id == listing_id,
+            Application.status.in_(["WAITING", "QUEUED"]),
+            Application.queue_number > current_rank
+        )
+        .order_by(Application.queue_number.asc())
+        .limit(1)
+    )
+    res = await db.execute(stmt)
+    app = res.scalar_one_or_none()
+    if app:
+        return app.user_id, float(app.score_ms or 0), app.queue_number
+
+    return None
+
+
+async def advance_to_next_candidate_or_close(
+    bot,
+    listing: Listing,
+    current_candidate_rank: int,
+    db: AsyncSession
+):
+    """
+    Önceki aday ile anlaşılamadığında sıradaki yedek adaya teklif götürür;
+    eğer başka aday kalmamışsa ilanı anlaşmazlık nedeniyle kapatır.
+    """
+    listing_id = listing.id
+    next_candidate = await get_next_backup_candidate(listing_id, current_rank=current_candidate_rank, db=db)
+
+    if next_candidate:
+        next_uid, next_score, new_rank = next_candidate
+
+        cand_stmt = select(User).where(User.id == next_uid)
+        cand_res = await db.execute(cand_stmt)
+        cand_user = cand_res.scalar_one_or_none()
+
+        cand_name = cand_user.full_name if (cand_user and cand_user.full_name) else f"Kullanıcı {next_uid}"
+        cand_mention = f"@{cand_user.username}" if (cand_user and cand_user.username) else f"<a href='tg://user?id={next_uid}'>{cand_name}</a>"
+
+        listing.status = "MATCHED"
+        await db.commit()
+
+        # 1. İlan Sahibine bilgi ver
+        try:
+            await bot.send_message(
+                chat_id=listing.creator_id,
+                text=(
+                    f"ℹ️ <b>Sıradaki Adaya Geçildi (#{listing_id})</b>\n\n"
+                    f"Önceki meslektaşımız ile anlaşma sağlanamadığı için sıra <b>{new_rank}. sıradaki adayımız ({cand_name})</b> meslektaşımıza devredilmiştir.\n\n"
+                    f"<i>Aday görevi onayladığında görüşme köprüsü derhal kurulacaktır.</i>"
+                ),
+                parse_mode="HTML"
+            )
+        except Exception as e:
+            print(f"[Confirmation] İlan sahibine sıra devir bildirimi hatası: {e}")
+
+        # 2. Sıradaki Adaya DM'den onay mesajı gönder
+        try:
+            await bot.send_message(
+                chat_id=next_uid,
+                text=(
+                    f"🔔 <b>Sıra Size Geldi! (#{listing_id})</b>\n\n"
+                    f"#{listing_id} numaralı tevkil ilanında önceki meslektaşımız ile "
+                    f"anlaşma sağlanamadığından sıra <b>{new_rank}. sıradaki aday olarak size</b> devredilmiştir.\n\n"
+                    f"Görevi devralmayı kabul ediyor musunuz?"
+                ),
+                reply_markup=get_next_candidate_keyboard(listing_id, current_rank=new_rank),
+                parse_mode="HTML"
+            )
+        except Exception as e:
+            print(f"[Confirmation] Sıradaki adaya DM bildirimi iletilemedi: {e}")
+
+        # 3. Ana grupta 2. kişiyi etiketleyerek bildirim yayınla
+        if listing.group_id:
+            try:
+                await bot.send_message(
+                    chat_id=listing.group_id,
+                    text=(
+                        f"📢 <b>[SIRA SİZE GELDİ — İlan #{listing_id}]</b>\n\n"
+                        f"🔔 Sayın {cand_mention}:\n"
+                        f"Önceki meslektaşımız ile anlaşma sağlanamadığından <b>{new_rank}. sıradaki aday olarak görüşme hakkı size geçmiştir!</b>\n\n"
+                        f"Lütfen görevi onaylamak için bot DM kutunuzu kontrol ediniz."
+                    ),
+                    parse_mode="HTML"
+                )
+            except Exception as e:
+                print(f"[Confirmation] Gruba sıradaki aday etiket bildirimi gönderilemedi: {e}")
+
+    else:
+        # Yedek aday yok -> İlanı anlaşmazlık nedeniyle kapat
+        listing.status = "CLOSED_DISAGREED"
+        await db.commit()
+
+        try:
+            await bot.send_message(
+                chat_id=listing.creator_id,
+                text=f"ℹ️ #{listing_id} numaralı ilanınız için görüşme sonlandırıldı ve yedek sırada başka aday bulunmadığından ilan kapatıldı."
+            )
+        except Exception:
+            pass
+
+        if listing.group_id:
+            try:
+                await bot.send_message(
+                    chat_id=listing.group_id,
+                    text=(
+                        f"❌ <b>İLAN KAPATILDI (#{listing_id})</b>\n\n"
+                        f"Adaylar ile anlaşma sağlanamadığı ve yedek sırada başka başvuru bulunmadığı için ilan kapatılmıştır."
+                    ),
+                    parse_mode="HTML"
+                )
+            except Exception:
+                pass
+
+    await update_group_listing_board(bot, listing, db=db)
+
+
 @router.callback_query(F.data.startswith("reason:"))
 async def handle_reason_selected(callback: CallbackQuery, db: AsyncSession):
     parts = callback.data.split(":")
@@ -426,91 +557,18 @@ async def handle_reason_selected(callback: CallbackQuery, db: AsyncSession):
             reply_markup=get_disagreement_admin_keyboard(session.creator_id, session.applicant_id)
         )
 
-    # İlanı veritabanından çek
+    # İlanı veritabanından çek ve sıradaki yedek adaya geç
     l_stmt = select(Listing).where(Listing.id == listing_id)
     l_res = await db.execute(l_stmt)
     listing = l_res.scalar_one_or_none()
 
-    # ŞARTNAME KURALI:
-    # "Sebep 'Ücret' harici seçildiğinde otomatik olarak sıradaki kişiye
-    #  'Sıra size geldi, kabul ediyor musunuz?' mesajı gönderir."
-    # (Tarife ihlali durumunda da ilan sahibine yeni aday önerilebilir)
-    if reason_code not in ["ucret"]:
-        # Sıradaki adayı getir (current_candidate_rank sonrasındaki ilk aday)
-        next_candidate = await RedisQueueService.get_next_available_applicant(listing_id, current_rank=current_candidate_rank)
-        if next_candidate:
-            next_uid, next_score, new_rank = next_candidate
-
-            # Aday bilgilerini çek (etiketlemek için)
-            cand_stmt = select(User).where(User.id == next_uid)
-            cand_res = await db.execute(cand_stmt)
-            cand_user = cand_res.scalar_one_or_none()
-
-            cand_mention = f"@{cand_user.username}" if (cand_user and cand_user.username) else (f"<a href='tg://user?id={next_uid}'>{cand_user.full_name if cand_user else 'Meslektaşımız'}</a>")
-
-            # 1. Ana grupta 2. kişiyi etiketleyerek bildirim yayınla
-            if listing and listing.group_id:
-                try:
-                    next_cand_group_kb = InlineKeyboardMarkup(
-                        inline_keyboard=[
-                            [
-                                InlineKeyboardButton(
-                                    text="💬 İlan Sahibine Yaz (Görüşmeyi Başlat)",
-                                    url=f"https://t.me/Tevkil_Denetim_Merkezi_bot?start=chat_{listing_id}"
-                                )
-                            ]
-                        ]
-                    )
-                    await callback.bot.send_message(
-                        chat_id=listing.group_id,
-                        text=(
-                            f"📢 <b>[SIRA SİZE GELDİ — İlan #{listing_id}]</b>\n\n"
-                            f"🔔 Sayın {cand_mention}:\n"
-                            f"Önceki meslektaşımız ile anlaşma sağlanamadığından <b>{new_rank}. sıradaki aday olarak görüşme hakkı size geçmiştir!</b>\n\n"
-                            f"👇 İlan sahibi ile görüşmeye başlamak için lütfen aşağıdaki butona tıklayınız:"
-                        ),
-                        reply_markup=next_cand_group_kb,
-                        parse_mode="HTML"
-                    )
-                except Exception as e:
-                    print(f"[Confirmation] Gruba sıradaki aday etiket bildirimi gönderilemedi: {e}")
-
-            # 2. DM'den de onay mesajı gönder
-            try:
-                await callback.bot.send_message(
-                    chat_id=next_uid,
-                    text=(
-                        f"🔔 <b>Sıra Size Geldi! (#{listing_id})</b>\n\n"
-                        f"#{listing_id} numaralı tevkil ilanında önceki meslektaşımız ile "
-                        f"anlaşma sağlanamadığından sıra <b>{new_rank}. sıradaki aday olarak size</b> devredilmiştir.\n\n"
-                        f"Görevi devralmayı kabul ediyor musunuz?"
-                    ),
-                    reply_markup=get_next_candidate_keyboard(listing_id, current_rank=new_rank),
-                    parse_mode="HTML"
-                )
-            except Exception as e:
-                print(f"[Confirmation] Sıradaki adaya DM bildirimi iletilemedi: {e}")
-        else:
-            # Yedek aday yok -> İlanı anlaşmazlık nedeniyle kapat
-            if listing:
-                listing.status = "CLOSED_DISAGREED"
-                await db.commit()
-
-            try:
-                await callback.bot.send_message(
-                    chat_id=session.creator_id,
-                    text=f"ℹ️ #{listing_id} numaralı ilanınız için görüşme sonlandırıldı ve yedek sırada başka aday bulunmadığından ilan kapatıldı."
-                )
-            except Exception:
-                pass
-    else:
-        # Ücret anlaşmazlığında kural: Sıradaki adaya geçilmez, ilan kapatılır
-        if listing:
-            listing.status = "CLOSED_DISAGREED"
-            await db.commit()
-
     if listing:
-        await update_group_listing_board(callback.bot, listing, db=db)
+        await advance_to_next_candidate_or_close(
+            bot=callback.bot,
+            listing=listing,
+            current_candidate_rank=current_candidate_rank,
+            db=db
+        )
 
 
 @router.callback_query(F.data.startswith("next_offer:"))
@@ -528,6 +586,8 @@ async def handle_next_offer(callback: CallbackQuery, db: AsyncSession):
     if not listing:
         await callback.answer("İlan bulunamadı.", show_alert=True)
         return
+
+    await callback.answer()
 
     if action == "accept":
         await callback.message.edit_text(f"🎉 Teklifi kabul ettiniz! İlan sahibiyle görüşme başlatılıyor...")
@@ -562,34 +622,9 @@ async def handle_next_offer(callback: CallbackQuery, db: AsyncSession):
         await db.commit()
 
         # Zincirleme devir: Sıradaki bir sonraki adaya git (target_rank + 1)
-        next_candidate = await RedisQueueService.get_next_available_applicant(listing_id, current_rank=target_rank)
-        if next_candidate:
-            next_uid, next_score, new_rank = next_candidate
-            try:
-                await callback.bot.send_message(
-                    chat_id=next_uid,
-                    text=(
-                        f"🔔 <b>Sıra Size Geldi! (#{listing_id})</b>\n\n"
-                        f"#{listing_id} numaralı tevkil ilanında önceki aday teklifi reddettiğinden "
-                        f"sıra <b>{new_rank}. sıradaki aday olarak size</b> devredilmiştir.\n\n"
-                        f"Görevi devralmayı kabul ediyor musunuz?"
-                    ),
-                    reply_markup=get_next_candidate_keyboard(listing_id, current_rank=new_rank),
-                    parse_mode="HTML"
-                )
-            except Exception as e:
-                print(f"[Confirmation] Zincirleme sıradaki adaya teklif iletilemedi: {e}")
-            await update_group_listing_board(callback.bot, listing, db=db)
-        else:
-            if listing:
-                listing.status = "CLOSED_DISAGREED"
-                await db.commit()
-            try:
-                await callback.bot.send_message(
-                    chat_id=listing.creator_id,
-                    text=f"ℹ️ #{listing_id} numaralı ilanınız için sıradaki adaylar teklifi reddetti ve yedek sırada başka aday kalmadığından ilan kapatıldı."
-                )
-            except Exception:
-                pass
-            if listing:
-                await update_group_listing_board(callback.bot, listing, db=db)
+        await advance_to_next_candidate_or_close(
+            bot=callback.bot,
+            listing=listing,
+            current_candidate_rank=target_rank,
+            db=db
+        )
