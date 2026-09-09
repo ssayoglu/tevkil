@@ -17,6 +17,8 @@ def test_tevkil_detection_positive_courthouses_with_context():
     assert is_tevkil_message("bayramiç devlet kurumuna evrak teslim edilecek, bir meslektaşımız var mı acaba?")
     
     # Diğer il / ilçe adliyeleri
+    assert is_tevkil_message("mersin 5 asliye hukuk")
+    assert is_tevkil_message("mersin 5. asliye hukuk tevkil")
     assert is_tevkil_message("Yarın Çağlayan 3. Asliye Hukuk duruşmasına girebilecek meslektaş aranıyor")
     assert is_tevkil_message("Bodrum adliyesinde dosya inceleyecek avukat var mı?")
     assert is_tevkil_message("Çorlu icra müdürlüğünde hacze gidebilecek meslektaşımız var mıdır?")

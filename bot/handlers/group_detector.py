@@ -21,6 +21,7 @@ TASK_CONTEXT_KEYWORDS = [
     r"\bgidebilecek\w*",
     r"\bmeslektas\w*",
     r"\bavukat\w*",
+    r"\bstajyer\w*",
     r"\bevrak\w*",
     r"\bdosya\w*",
     r"\bhaciz\w*",
@@ -32,6 +33,18 @@ TASK_CONTEXT_KEYWORDS = [
     r"\byetki\s*belges\w*",
     r"\badliye\w*",
     r"\bmahkeme\w*",
+    r"\basliye\w*",
+    r"\bhukuk\w*",
+    r"\bceza\w*",
+    r"\bsulh\w*",
+    r"\bagir\s*ceza\w*",
+    r"\bis\s*mahkem\w*",
+    r"\baile\w*",
+    r"\bticaret\w*",
+    r"\btuketici\w*",
+    r"\bkadastro\w*",
+    r"\binfaz\w*",
+    r"\bsavcilik\w*",
     r"\bkurum\w*",
     r"\bdevlet\s*kurum\w*",
     r"\bvar\s*mi\w*",
@@ -58,7 +71,7 @@ def is_tevkil_message(text: str) -> bool:
         if re.search(neg_pat, norm):
             return False
 
-    if re.search(r"\btevkildir\b", norm):
+    if re.search(r"\b(tevkildir|tevkil)\b", norm):
         return True
 
     words = re.findall(r"[a-z0-9]+", norm)
