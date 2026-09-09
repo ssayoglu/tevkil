@@ -70,6 +70,8 @@ async def handle_agree(callback: CallbackQuery, db: AsyncSession):
         await callback.answer("⚠️ Sadece bu tevkil görüşmesinde aktif olan taraflar onay verebilir.", show_alert=True)
         return
 
+    await callback.answer()
+
     is_creator = (user.id == session.creator_id)
     if is_creator:
         session.creator_agreed = True
@@ -230,15 +232,19 @@ async def handle_disagree_prompt(callback: CallbackQuery, db: AsyncSession):
         await callback.answer("⚠️ Sadece bu görüşmenin aktif tarafları anlaşamama bildirebilir.", show_alert=True)
         return
 
+    await callback.answer()
     role_prefix = "creator" if user.id == session.creator_id else "applicant"
 
-    await callback.message.edit_text(
-        f"❌ <b>Anlaşamama Sebebini Belirtiniz:</b>\n\n"
-        f"Lütfen meslektaşınızla anlaşamama gerekçenizi seçiniz.\n"
-        f"⚠️ <b>Önemli Kural:</b> Tarife altı ücret tekliflerinde sistem tarafından <b>DİREKT BAN</b> yaptırımı uygulanır:",
-        reply_markup=get_reason_keyboard(listing_id, role_prefix=role_prefix),
-        parse_mode="HTML"
-    )
+    try:
+        await callback.message.edit_text(
+            f"❌ <b>Anlaşamama Sebebini Belirtiniz:</b>\n\n"
+            f"Lütfen meslektaşınızla anlaşamama gerekçenizi seçiniz.\n"
+            f"🚨 <b>Önemli Kural:</b> Tarife altı ücret tekliflerinde sistem tarafından <b>DİREKT SİSTEMDEN UZAKLAŞTIRMA</b> yaptırımı uygulanır:",
+            reply_markup=get_reason_keyboard(listing_id, role_prefix=role_prefix),
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        print(f"[Confirmation] disagree edit_text hatası: {e}")
 
 
 @router.callback_query(F.data.startswith("reason:"))
@@ -268,6 +274,8 @@ async def handle_reason_selected(callback: CallbackQuery, db: AsyncSession):
     if not session:
         await callback.answer("Aktif oturum bulunamadı.", show_alert=True)
         return
+
+    await callback.answer()
 
     current_candidate_rank = session.candidate_rank or 1
 
