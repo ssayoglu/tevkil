@@ -9,49 +9,83 @@
 Bu proje, **Av. Serkan SAYOĞLU** tarafından hazırlanan **17.02.2026** tarihli Teknik Şartname doğrultusunda geliştirilen bir **Telegram Avukat Tevkil Yönetim Botu**dur.
 
 ### Temel Hedef:
-Telegram hukuk gruplarında paylaşılan tevkil ilanlarını otomatik olarak tespit etmek, başvuruları milisaniye hassasiyetli adil bir sıra sistemine sokmak, tarafları bot üzerinden gizlilik esasıyla (anonim) çift yönlü köprülemek (bridge), zaman aşımı ve ceza kurallarını işletmek ve tüm süreci yöneticilerin bulunduğu özel bir **Admin Denetim Grubu** üzerinden gözetim altında tutmaktır.
+Telegram hukuk gruplarında paylaşılan tevkil ilanlarını otomatik olarak tespit etmek (doğrudan `"tevkildir"` veya Türkiye'nin tüm il/ilçe adliyeleri ve duruşma/evrak/katılacak görev bağlamı içeren mesajlar), başvuruları milisaniye hassasiyetli adil bir sıra sistemine sokmak, tarafları bot üzerinden gizlilik esasıyla (anonim) çift yönlü köprülemek (bridge), zaman aşımı ve ceza kurallarını işletmek, **Rank & Ceza Puanı, Kademeli Handikap ve Tarife Altı Ücret Direkt Ban** mekanizması ile güvenilirliği sağlamak ve tüm süreci yöneticilerin bulunduğu özel bir **Admin Denetim Grubu** üzerinden gözetim altında tutmaktır.
 
 ---
 
 ## 📜 2. Teknik Şartname ve İş Mantığı Kuralları
 
-### A. İlan Takibi ve Başvuru
-1. **Akıllı Filtre (`group_detector.py`):**
-   - Hukuk grubunda paylaşılan mesajlarda `"tevkildir"` kelimesi aranır (Türkçe büyük/küçük harf, İ-I-ı-i varyasyonları ve Unicode normalizing yapılmıştır).
-   - Bot, Telegram API kısıtı gereği başkasının mesajına buton ekleyemediğinden, tespit ettiği mesaja anında yanıt (reply) olarak **"📌 Tevkil İlanı Tespit Edildi"** mesajı ve `[📋 Başvur]` inline butonu gönderir.
-2. **Canlı Şeffaf Başvuru Panosu (Özel Talep):**
-   - Kullanıcılar butona tıkladıkça bot, gruptaki yanıt mesajını `HH:MM:SS.mmm` (milisaniye) hassasiyetiyle anlık olarak günceller (`edit_message_text`).
-   - Örnek: `1. Av. Ahmet Y. — 14:32:15.120 [🟢 Görüşmede]`
-   - Gruptaki herkes kimin kaçıncı salisede başvurduğunu şeffaf olarak görür.
-3. **Milisaniye Sıralama Algoritması (`redis_queue.py`):**
+### A. İlan Takibi ve Akıllı Adliye Tespiti (`group_detector.py` & `courthouses.py`)
+1. **Akıllı Adliye & Kelime Filtresi:**
+   - Hukuk grubunda paylaşılan mesajlarda `"tevkildir"` kelimesi aranır.
+   - **Tüm İl ve İlçe Adliyeleri Tespiti:** Türkiye'de adliyesi/mülhakatı bulunan 81 il ve tüm ilçeler (örn. Bursa, Bayramiç, Çağlayan, Kartal, Bakırköy, Çorlu, Bodrum, Kuşadası, İnegöl vb.) mesajda geçiyorsa ve duruşma/evrak teslimi/katılacak var mı/meslektaş aranıyor bağlamı varsa bot bunu otomatik tevkil ilanı olarak tespit eder.
+   - **Negatif İstisna:** Eğer mesaj içerisinde `"tevkil değildir"`, `"tevkil değil"` gibi ifadeler geçiyorsa kesinlikle tevkil sayılmaz (`False`).
+2. **İlan Sahibine Harici DM Atılmasını Engelleme (Anti-Bypass Koruması):**
+   - Bot grupta admin ise kullanıcının orijinal mesajını anında siler (`message.delete()`), böylece diğer üyelerin mesaj sahibinin profiline/avatarına tıklayıp harici DM atması engellenir.
+   - İlan metni ve canlı başvuru panosu bot tarafından anonim olarak (`👤 İlan Sahibi: Meslektaşımız (⭐ 105 Puan)`) yayınlanır.
+3. **Canlı Şeffaf Başvuru Panosu (`application.py`):**
+   - Kullanıcılar butona tıkladıkça bot, gruptaki yanıt mesajını Türkiye saatine (`Europe/Istanbul`) göre `HH:MM:SS.mmm` hassasiyetiyle anlık günceller.
+   - Her adayın **Rank Puanı**, **Handikap Durumu** ve **Anlık Süreç Durumu** (`[🟢 Görüşmede]`, `[⏳ Yedek Sırada]`, `[🤝 Anlaşıldı]`, `[❌ Anlaşılamadı]`, `[🚫 Reddetti]`) gösterilir.
+4. **Milisaniye Sıralama ve Kademeli Handikap Algoritması (`redis_queue.py` & `rank_service.py`):**
    - Redis Sorted Set (`ZADD ... timestamp_ms`) ile atomik olarak kaydedilir (race condition engellenir).
    - **Sadece ilk tıklayan kişi (1. sıra)** görüşme başlatma hakkı kazanır.
-   - Diğer adaylara: *"Tevkil için {X}. sıradasınız"* bilgisi iletilir.
+   - Diğer adaylara sırası özel mesajla iletilir.
 
-### B. Anonim Köprüleme (Bridge) ve İletişim
-1. **Gizlilik:** Tarafların Telegram profilleri/numaraları karşı tarafa gizlenir. Bot mesajları `[İlan Sahibi]` ve `[1. Sıra Başvuran Aday]` etiketleriyle iletir.
-2. **Süreç Başlatma:**
-   - İlan sahibine: *"Tevkil ilanı için 1. sıra başvurusu alındı. Lütfen görevin detaylarını yazarak iletişimi başlatın."* + `[🤝 Anlaştık]` / `[❌ Anlaşamadık]` butonları.
-   - Adaya: *"Tevkil için 1. sıradan seçildiniz. İlan sahibi detayları ilettiğinde size buradan ulaştırılacaktır."*
-3. **Medya / Dosya Desteği:** Sistem metin mesajlarının yanı sıra **fotoğraf** ve **PDF/doküman** gönderimini destekler.
+### B. ⭐ Rank, Ceza Puanı ve Kademeli Sıra Handikapı (`rank_service.py`)
+1. **Rank Puanı (Varsayılan: 100):** Başarıyla sonuçlanan her tevkil için hem ilan sahibine hem de adaya **+5 Puan** verilir.
+2. **Ceza Puanı:**
+   - 30 dakika kuralı ihlali (ilk mesajı göndermeme): **+20 Ceza Puanı** ve 5 gün sistem banı.
+   - Tarife altı teklif ihlali: **+30 Ceza Puanı** ve 15 gün Direkt Ban.
+   - Admin cezaları: **+10 ila +30 Ceza Puanı** (`/ceza_puani_ver`).
+3. **Efektif Net Puan:** `max(0, rank_score - penalty_points)`.
+4. **Kademeli Sıra Handikapı (1-2-3-4 Sıra Geriden Başlama):**
+   - Kullanıcının puanı sistem ortalamasının altındaysa veya ceza puanı varsa `[📋 Başvur]` butonuna bastığında milisaniyesine sanal gecikme eklenir:
+     - *Seviye 1:* +3.000 ms (1 sıra geriye atma eğilimi)
+     - *Seviye 2:* +7.000 ms (2 sıra geriye atma eğilimi)
+     - *Seviye 3:* +15.000 ms (3 sıra geriye atma eğilimi)
+     - *Seviye 4:* +30.000 ms (4+ sıra geriye atma eğilimi)
 
-### C. Zaman Aşımı (30 Dk Kuralı) ve Cezai Müeyyideler (`timeout_service.py`)
-1. **30 Dakika Kuralı:** İlan sahibi eşleşme sağlandıktan sonra 30 dakika içinde ilk mesajı göndermezse ilan otomatik iptal edilir.
-2. **Otomatik Kara Liste (Ban):** Kuralı ihlal eden ilan sahibi **5 gün süreyle kara listeye alınır** (yeni ilan veremez, başvuramaz).
-3. **Grup Duyurusu:** İptal olan ilan ana grupta bot tarafından duyurulur.
+### C. 🚨 Tarife Altı Ücret Teklifinde Doğrudan Ban (Direkt Ban)
+- Baro Asgari Ücret Tarifesi veya grup asgari tarifesi altında ücret teklif edilmesi meslek etiği gereği yasaktır.
+- `[❌ Anlaşamadık]` seçilip `[🚨 Tarife Altı Teklif (Direkt Ban)]` işaretlendiğinde ihlali yapan kullanıcı **15 gün süreyle doğrudan sistemden men edilir (Direkt Ban)** ve hesabına **+30 Ceza Puanı** işlenir.
+- Admin Denetim Grubu'na yüksek öncelikli kırmızı alarm iletilir.
 
-### D. Admin Denetimi ve Loglama (`audit_service.py` & `admin_panel.py`)
-1. **Merkezi İzleme:** Taraflar arasındaki tüm yazışmalar, fotoğraflar ve PDF'ler yöneticilerin bulunduğu özel **"Admin Denetim Grubu"**na anlık olarak aktarılır.
-2. **Müdahale Komutları (Admin Grubunda Çalışır):**
-   - `/durdur <ilan_id>`: Aktif görüşmeyi anında keser.
-   - `/kullanici_kisitla <user_id> [gün] [sebep]`: Kullanıcıyı süreli kısıtlar.
-   - `/ceza_kaldir <user_id>`: Kısıtlamayı kaldırır.
-   - `/aktif_ilanlar`: Devam eden oturumları listeler.
+### D. Anonim Köprüleme (Bridge) ve İletişim (`bridge_service.py` & `bridge_chat.py`)
+1. **Gizlilik:** Tarafların Telegram profilleri/numaraları karşı tarafa gizlenir. Bot mesajları `[İlan Sahibi]` ve `[X. Sıra Başvuran Aday]` etiketleriyle iletir.
+2. **Medya Desteği:** Sistem metin mesajlarının yanı sıra **fotoğraf**, **ses kaydı (voice)** ve **PDF/doküman** gönderimini destekler.
 
-### E. Anlaşma Teyit ve Sıra Devri Mekanizması (`confirmation.py`)
-1. İlan sahibinin ekranındaki `[🤝 Anlaştık]` seçilirse ilan `COMPLETED` olur, taraflara teşekkür mesajı gider ve kapatılır.
-2. `[❌ Anlaşamadık]` seçilirse sebep istenir: `[Ücret]`, `[Mesafe]`, `[Kıdem]`, `[Diğer]`.
-3. **Önemli Kural:** Sebep **"Ücret" haricinde** seçilirse (Mesafe/Kıdem/Diğer), bot otomatik olarak sıradaki 2. adaya *"Sıra size geldi, kabul ediyor musunuz? [✅ Kabul] [❌ Red]"* teklifi gönderir. Kabul edilirse 2. adayla köprü kurulur.
+### E. Zaman Aşımı (30 Dk Kuralı) ve Cezai Müeyyideler (`timeout_service.py`)
+1. **30 Dakika Kuralı:** İlan sahibi eşleşme sağlandıktan sonra 30 dakika içinde ilk mesajı göndermezse ilan iptal edilir.
+2. **Otomatik Kara Liste ve Ceza:** İlan sahibi **5 gün süreyle kara listeye alınır** ve hesabına **+20 Ceza Puanı** işlenir.
+3. **Dirençli Arka Plan Denetleyicisi:** Veritabanındaki `timeout_at` alanı ve her 60 saniyede bir çalışan `run_periodic_timeout_checker` sayesinde sunucu/bot yeniden başlasa dahi zaman aşımı aksamaz.
+4. **Grup Duyurusu:** İptal olan ilan ana grupta bot tarafından duyurulur ve pano güncellenir.
+
+### F. Anlaşma Teyit ve Zincirleme Sıra Devri (`confirmation.py`)
+1. İlan sahibi `[🤝 Anlaştık]` seçerse ilan `COMPLETED` olur, taraflara teşekkür mesajı gider, her iki tarafa **+5 Rank Puanı** verilir ve pano güncellenir.
+2. `[❌ Anlaşamadık]` seçilirse sebep istenir (`[🚨 Tarife Altı Teklif]`, `[💰 Ücret]`, `[📍 Mesafe]`, `[🎓 Kıdem]`, `[❓ Diğer]`).
+3. **Zincirleme Devir:** Sebep **"Ücret" haricinde** seçilirse sistem otomatik olarak sıradaki adaya teklif iletir. Teklif reddedilirse (`decline`) zincir bir sonraki yedek adaya (varsa) devredilir.
+
+### G. Kullanıcı ve Admin Komutları
+1. **Kullanıcı DM Komutları (`user_panel.py`):**
+   - `/start` - Başlangıç, rank puanı, handikap durumu ve yönlendirmeler.
+   - `/yardim` - Sistem kuralları, tarife yasağı ve detaylı kullanım rehberi.
+   - `/profilim` / `/durum` - Detaylı rank puanı, ceza dökümü ve ban durumu.
+   - `/ilanlarim` - Kullanıcının açtığı son ilanlar.
+   - `/basvurularim` - Kullanıcının yaptığı son başvurular.
+   - `/baro_kaydet <Baro> <Sicil>` - Baro levha ve sicil doğrulama.
+2. **Admin Denetim Grubu Komutları (`admin_panel.py`):**
+   - `/admin_yardim` - Admin komut listesi.
+   - `/durdur <ilan_id>` - Aktif görüşmeyi anında sonlandırır.
+   - `/tarife_ban <user_id> [gün] [sebep]` - Tarife ihlaline doğrudan ban uygular.
+   - `/kullanici_kisitla <user_id> [gün] [sebep]` - Kullanıcıyı süreli kısıtlar.
+   - `/ceza_kaldir <user_id>` - Kısıtlamayı kaldırır.
+   - `/ceza_puani_ver <user_id> <puan> [sebep]` - Ceza puanı ekler.
+   - `/puan_ekle <user_id> <puan>` - Rank puanı ekler.
+   - `/kullanici_bilgi <user_id>` - Kullanıcı bilgi kartını görüntüler.
+   - `/ilan_detay <ilan_id>` - İlanın başvuru kuyruğunu ve denetim log sayısını görüntüler.
+   - `/aktif_ilanlar` - Devam eden tüm köprü görüşmelerini listeler.
+   - `/kara_liste` - Halihazırda yasaklı kullanıcıları listeler.
+   - `/istatistik` - Sistem geneli tevkil, kullanıcı ve işlem istatistikleri.
 
 ---
 
@@ -61,6 +95,7 @@ Telegram hukuk gruplarında paylaşılan tevkil ilanlarını otomatik olarak tes
 .
 ├── Dockerfile                  # Bot container tanımı (Python 3.12-slim)
 ├── docker-compose.yml          # PostgreSQL 16, Redis 7 ve Bot orkestrasyonu
+├── deploy.sh                   # Tek komutla VPS sunucu kurulum scripti
 ├── requirements.txt            # aiogram 3.x, sqlalchemy, asyncpg, redis, pydantic-settings
 ├── .env.example                # Örnek ortam değişkenleri
 ├── README.md                   # Genel proje dokümantasyonu
@@ -69,78 +104,57 @@ Telegram hukuk gruplarında paylaşılan tevkil ilanlarını otomatik olarak tes
 │   ├── admin_guide.md          # Admin yönetim komutları ve panel dokümanı
 │   └── deployment_guide.md     # Ubuntu VPS sunucu kurulum rehberi
 ├── bot/
-│   ├── main.py                 # Bot başlatıcı, middleware ve router kayıtları
+│   ├── main.py                 # Bot başlatıcı, periyodik checker ve router kayıtları
 │   ├── config.py               # Pydantic Settings ortam değişkenleri
 │   ├── database/
 │   │   ├── connection.py       # Async SQLAlchemy session yöneticisi
-│   │   └── models.py           # User, Listing, Application, BridgeSession, MessageLog modelleri
+│   │   └── models.py           # User, Listing, Application, BridgeSession, MessageLog, PenaltyLog
 │   ├── services/
 │   │   ├── redis_queue.py      # ZADD milisaniye sıralama ve lock mekanizması
-│   │   ├── bridge_service.py   # Anonim DM mesaj/fotoğraf/PDF iletim motoru
-│   │   ├── timeout_service.py  # 30 dk zamanlayıcı ve 5 gün otomatik ban servisi
+│   │   ├── rank_service.py     # Rank, ceza puanı ve kademeli handikap servisi
+│   │   ├── baro_service.py     # Baro Sicil / Levha doğrulama altyapısı
+│   │   ├── bridge_service.py   # Anonim DM mesaj/fotoğraf/ses/PDF iletim motoru
+│   │   ├── timeout_service.py  # 30 dk zamanlayıcı ve dirençli arka plan denetleyicisi
 │   │   └── audit_service.py    # Admin denetim grubuna anlık klonlama servisi
 │   ├── handlers/
-│   │   ├── group_detector.py   # 'tevkildir' filtresi ve ilan yakalama
+│   │   ├── user_panel.py       # /start, /yardim, /profilim, /ilanlarim, /basvurularim
+│   │   ├── group_detector.py   # Adliye NLP filtresi, anti-bypass ve ilan yakalama
 │   │   ├── application.py      # 'Başvur' buton callback ve canlı pano güncellemesi
-│   │   ├── bridge_chat.py      # İlan sahibi ve aday arasındaki DM mesajlaşması
-│   │   ├── confirmation.py     # [Anlaştık] / [Anlaşamadık] / Sıra devri
-│   │   └── admin_panel.py      # Admin müdahale komutları
-│   └── middlewares/
-│       ├── db_session.py       # Async SQLAlchemy session middleware
-│       └── blacklist_check.py  # Kara liste ve ceza kontrol middleware
+│   │   ├── bridge_chat.py      # İlan sahibi ve aday arasındaki anonim DM mesajlaşması
+│   │   ├── confirmation.py     # [Anlaştık] / [Anlaşamadık] / Tarife Ban / Sıra Devri
+│   │   └── admin_panel.py      # Admin müdahale ve istatistik komutları
+│   ├── middlewares/
+│   │   ├── db_session.py       # Async SQLAlchemy session middleware
+│   │   └── blacklist_check.py  # Kara liste ve ceza kontrol middleware
+│   └── utils/
+│       ├── courthouses.py      # Türkiye 81 il + tüm ilçe adliyeleri veri seti & normalizer
+│       └── time_utils.py       # Türkiye saat dilimi (Europe/Istanbul) ve ms formatlayıcı
 └── tests/
-    ├── test_detector.py        # 'tevkildir' regex ve Türkçe karakter testleri
-    └── test_queue_logic.py     # Milisaniye formatlama ve anlaşmazlık yönlendirme testleri
+    ├── test_detector.py        # Adliye il/ilçe regex ve negatif istisna testleri
+    ├── test_queue_logic.py     # Milisaniye formatlama ve anlaşmazlık yönlendirme testleri
+    ├── test_rank_service.py    # Net puan, handikap seviyeleri ve sanal gecikme testleri
+    ├── test_baro_service.py    # Sicil format doğrulama testleri
+    ├── test_time_utils.py      # Saat dilimi ve ms formatlama testleri
+    ├── test_handlers_user_panel.py # Kullanıcı paneli handler testleri
+    ├── test_handlers_admin.py  # Admin panel komut testleri
+    └── test_confirmation_chain.py # Zincirleme devir ve klavye testleri
 ```
 
 ---
 
-## 💻 4. Yeni Bilgisayarda Kurulum ve Çalıştırma
+## 💻 4. Kurulum ve Test
 
-### 1. Depoyu Klonlayın ve Ortam Değişkenlerini Tanımlayın
 ```bash
-git clone <REPO_URL>
-cd <REPO_KLASORU>
-cp .env.example .env
-```
-
-`.env` dosyasındaki kritik alanlar:
-- `BOT_TOKEN`: Telegram `@BotFather`'dan alınan bot tokenı.
-- `ADMIN_CHAT_ID`: Denetim grubunun chat ID'si (örn. `-1001234567890`).
-
-### 2. Docker Compose ile Çalıştırma (Tavsiye Edilen)
-```bash
-docker compose up -d --build
-```
-Logları izlemek için:
-```bash
-docker compose logs -f bot
-```
-
-### 3. Yerel Geliştirme Ortamı (Local Python)
-```bash
+# Sanal ortam oluşturup paketleri kurun:
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements.txt pytest pytest-asyncio pytest-mock
 
-# Testleri çalıştırmak için:
+# Tüm otomatik testleri çalıştırın:
 PYTHONPATH=. pytest tests/ -v
 ```
 
 ---
 
-## 🎯 5. Gelecek Geliştirme Adımları (Roadmap / Backlog)
-
-Projeyi devralacak ajan veya geliştirici için sıradaki potansiyel geliştirme görevleri:
-
-1. **Canlı Telegram Testleri:**
-   - Bir test grubunda botu admin yaparak `tevkildir` mesajı atmak.
-   - İki farklı Telegram hesabıyla butona tıklayıp milisaniyeli sıralama panosunu ve DM köprüsünü test etmek.
-   - Fotoğraf ve PDF gönderimi ile admin grubuna iletimini doğrulamak.
-   - 30 dakika bekleme / zaman aşımı ve 5 günlük ban mekanizmasını tetiklemek.
-2. **Baro Levha / TC Kimlik / Avukat Doğrulama (İsteğe Bağlı Ek Özellik):**
-   - Başvuru yapan avukatların Baro Sicil No / Levha sorgulaması ile doğrulanması.
-3. **Webhook Modu:**
-   - Yüksek trafikli canlı sunucuda Polling yerine FastAPI / aiohttp tabanlı Telegram Webhook entegrasyonu.
-4. **Admin Web Dashboard (İsteğe Bağlı):**
-   - Adminlerin Telegram komutları dışında web tarayıcısı üzerinden tüm geçmiş logları, cezaları ve istatistikleri görebileceği hafif bir panel (FastAPI + Jinja2 / React).
+## ⚖️ Lisans ve Telif
+Proje Şartnamesi: **Av. Serkan SAYOĞLU** (17.02.2026)

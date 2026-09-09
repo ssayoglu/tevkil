@@ -1,13 +1,14 @@
 from typing import Optional, Dict, Any
+from datetime import datetime, timedelta
 from aiogram import Bot
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from sqlalchemy import select, update
+from bot.config import settings
 from bot.database.connection import AsyncSessionLocal
 from bot.database.models import BridgeSession, Listing
 from bot.services.redis_queue import RedisQueueService
 from bot.services.audit_service import AuditService
 from bot.services.timeout_service import TimeoutService
-from datetime import datetime
 
 
 def get_confirmation_keyboard(listing_id: int) -> InlineKeyboardMarkup:
@@ -36,13 +37,18 @@ class BridgeService:
         """
         İlan sahibi ile sıradaki aday arasında anonim köprü oturumunu başlatır.
         """
+        now = datetime.utcnow()
+        timeout_at = now + timedelta(minutes=settings.timeout_minutes)
+
         async with AsyncSessionLocal() as db:
             session = BridgeSession(
                 listing_id=listing_id,
                 creator_id=creator_id,
                 applicant_id=applicant_id,
+                candidate_rank=candidate_rank,
                 is_active=True,
-                started_at=datetime.utcnow()
+                started_at=now,
+                timeout_at=timeout_at
             )
             db.add(session)
 
@@ -52,7 +58,7 @@ class BridgeService:
             listing = res.scalar_one_or_none()
             if listing:
                 listing.status = "MATCHED"
-                listing.matched_at = datetime.utcnow()
+                listing.matched_at = now
 
             await db.commit()
             await db.refresh(session)
@@ -98,7 +104,9 @@ class BridgeService:
                     f"📌 <b>#{listing_id} Numaralı Tevkil İlanınız İçin {candidate_rank}. Sıra Başvurusu Alındı.</b>\n\n"
                     f"⚠️ <i>Lütfen görevin detaylarını yazarak iletişimi başlatın.</i>\n\n"
                     f"⏳ <b>Önemli Kural:</b> İlk mesajı <b>30 dakika</b> içerisinde iletmeniz gerekmektedir, "
-                    f"aksi halde ilanınız iptal edilecek ve hesabınız 5 gün kısıtlanacaktır.\n\n"
+                    f"aksi halde ilanınız iptal edilecek, hesabınıza +20 Ceza Puanı eklenecek ve 5 gün kısıtlanacaktır.\n\n"
+                    f"🛡️ <b>Güvenlik Hatırlatması:</b> Size Telegram grubundan profilinize tıklayıp 'hemen yaparım' diyerek "
+                    f"harici özel mesaj atanları <b>kesinlikle dikkate almayınız</b>. Tüm süreci bu bot üzerinden yürütünüz.\n\n"
                     f"Görüşme tamamlandığında aşağıdaki butonlardan durumu teyit edebilirsiniz:"
                 ),
                 reply_markup=get_confirmation_keyboard(listing_id),
@@ -181,11 +189,15 @@ class BridgeService:
                 doc_id = sender_msg.document.file_id
                 cap = f"{sender_tag}\n\n{text_body}" if text_body else sender_tag
                 await bot.send_document(chat_id=partner_id, document=doc_id, caption=cap[:1024], parse_mode="HTML")
+            elif sender_msg.voice:
+                voice_id = sender_msg.voice.file_id
+                cap = f"{sender_tag}\n\n{text_body}" if text_body else sender_tag
+                await bot.send_voice(chat_id=partner_id, voice=voice_id, caption=cap[:1024], parse_mode="HTML")
             elif sender_msg.text:
                 full_msg = f"{sender_tag}\n\n{text_body}"
                 await bot.send_message(chat_id=partner_id, text=full_msg, parse_mode="HTML")
             else:
-                await sender_msg.reply("⚠️ Sadece metin, fotoğraf ve PDF/belge gönderimi desteklenmektedir.")
+                await sender_msg.reply("⚠️ Sadece metin, fotoğraf, ses kaydı ve PDF/belge gönderimi desteklenmektedir.")
                 return
         except Exception as e:
             print(f"[BridgeService] Mesaj partnere iletilemedi: {e}")

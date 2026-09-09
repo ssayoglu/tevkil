@@ -6,21 +6,96 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from bot.database.models import User, Listing
 from bot.services.audit_service import AuditService
+from bot.services.rank_service import RankService
+from bot.utils.time_utils import get_current_istanbul_time
+from bot.utils.courthouses import TURKISH_COURTHOUSES, normalize_text_for_search
 
 router = Router()
 
+# Tevkil niyet ve görev bağlamı anahtar kelimeleri
+TASK_CONTEXT_KEYWORDS = [
+    r"\bdurusma\w*",
+    r"\bkatilacak\w*",
+    r"\bgirecek\w*",
+    r"\bgirebilecek\w*",
+    r"\bkatilabilecek\w*",
+    r"\bgidebilecek\w*",
+    r"\bmeslektas\w*",
+    r"\bavukat\w*",
+    r"\bevrak\w*",
+    r"\bdosya\w*",
+    r"\bhaciz\w*",
+    r"\bicra\w*",
+    r"\bkesif\w*",
+    r"\bteslim\w*",
+    r"\bfotokopi\w*",
+    r"\bkalem\w*",
+    r"\byetki\s*belges\w*",
+    r"\badliye\w*",
+    r"\bmahkeme\w*",
+    r"\bkurum\w*",
+    r"\bdevlet\s*kurum\w*",
+    r"\bvar\s*mi\w*",
+    r"\byardimci\w*",
+    r"\btevkil\w*"
+]
+
+# Negatif istisnalar: Tevkil olmadığını belirten ifadeler
+NEGATIVE_PATTERNS = [
+    r"\btevkil\s+degildir\b",
+    r"\btevkildir\s+degildir\b",
+    r"\btevkil\s+degil\b",
+    r"\btevkil\s+degildir\w*",
+    r"\btevkil\s+amaciyla\s+degil\b",
+]
+
 
 def is_tevkil_message(text: str) -> bool:
+    """
+    Mesajın tevkil ilanı olup olmadığını akıllı NLP / Regex kurallarıyla tespit eder:
+    1. 'tevkil değildir' gibi negatif ifadeler varsa False döner.
+    2. 'tevkildir' ibaresi geçiyorsa True döner.
+    3. Türkiye'de adliyesi olan il/ilçe adı VE duruşma/evrak/katılacak/meslektaş vb. görev bağlamı varsa True döner.
+    """
     if not text:
         return False
-    # Türkçe büyük İ / I harflerinin Unicode combining dot tuzağını ve varyasyonlarını engelle
-    normalized = (
-        text.replace("İ", "i")
-        .replace("I", "ı")
-        .lower()
-        .replace("ı", "i")
-    )
-    return bool(re.search(r"\btevkildir\b", normalized))
+
+    norm = normalize_text_for_search(text)
+
+    # 1. Negatif kontrol: "tevkil değildir", "tevkil değil"
+    for neg_pat in NEGATIVE_PATTERNS:
+        if re.search(neg_pat, norm):
+            return False
+
+    # 2. Doğrudan "tevkildir" kontrolü
+    if re.search(r"\btevkildir\b", norm):
+        return True
+
+    # 3. Adliye İl/İlçe tespiti + Görev/Meslektaş bağlamı kontrolü
+    # Kelimeleri tokenize et
+    words = re.findall(r"[a-z0-9]+", norm)
+    has_courthouse = False
+
+    # Tekil veya 2'li kelime gruplarında il/ilçe adliye ismi ara
+    for w in words:
+        if w in TURKISH_COURTHOUSES:
+            has_courthouse = True
+            break
+
+    if not has_courthouse:
+        # İki kelimeli yer adları için kontrol (örn. kdz eregli, 19 mayis)
+        for ch in TURKISH_COURTHOUSES:
+            if " " in ch and ch in norm:
+                has_courthouse = True
+                break
+
+    if has_courthouse:
+        # Görev bağlamı var mı? (duruşma, evrak teslim, katılacak var mı, meslektaşımız vb.)
+        for pat in TASK_CONTEXT_KEYWORDS:
+            if re.search(pat, norm):
+                return True
+
+    return False
 
 
 def build_apply_keyboard(listing_id: int) -> InlineKeyboardMarkup:
@@ -55,7 +130,9 @@ async def detect_tevkil_post(message: Message, db: AsyncSession):
         user = User(
             id=sender.id,
             username=sender.username,
-            full_name=sender.full_name or ""
+            full_name=sender.full_name or "",
+            rank_score=100,
+            penalty_points=0
         )
         db.add(user)
         await db.commit()
@@ -69,7 +146,7 @@ async def detect_tevkil_post(message: Message, db: AsyncSession):
     if user.is_banned:
         time_str = user.banned_until.strftime("%d.%m.%Y %H:%M") if user.banned_until else ""
         await message.reply(
-            f"⛔ <b>Sayın {sender.full_name},</b> hesabınız {time_str} tarihine kadar "
+            f"⛔ <b>Sayın Meslektaşımız,</b> hesabınız {time_str} tarihine kadar "
             f"kısıtlı olduğundan tevkil ilanı açamazsınız.",
             parse_mode="HTML"
         )
@@ -89,36 +166,73 @@ async def detect_tevkil_post(message: Message, db: AsyncSession):
     await db.commit()
     await db.refresh(listing)
 
-    # 3. Grupta butonu içeren yanıt (reply) mesajı yayınla
-    now_str = datetime.now().strftime("%H:%M:%S")
-    creator_display = sender.full_name or f"@{sender.username}" if sender.username else "Meslektaşımız"
+    # 3. Özelden Mesaj Atılmasını Engellemek İçin Orijinal Mesajı Silmeyi Dene
+    is_deleted = False
+    try:
+        await message.delete()
+        is_deleted = True
+    except Exception:
+        is_deleted = False
+
+    # 4. Grupta Anonim İlan Mesajı Yayınla
+    now_istanbul = get_current_istanbul_time()
+    now_str = now_istanbul.strftime("%H:%M:%S")
+    net_score = RankService.calculate_net_score(user.rank_score, user.penalty_points)
     
     reply_text = (
-        f"📌 <b>Tevkil İlanı Tespit Edildi (#{listing.id})</b>\n"
-        f"👤 <b>İlan Sahibi:</b> {creator_display}\n"
+        f"📌 <b>YENİ TEVKİL İLANI (#{listing.id})</b>\n"
+        f"👤 <b>İlan Sahibi:</b> Meslektaşımız (⭐ {net_score} Puan)\n"
         f"🕒 <b>Yayın Zamanı:</b> <code>{now_str}</code>\n\n"
+        f"📝 <b>İlan İçeriği:</b>\n"
+        f"<i>{text}</i>\n\n"
         f"📋 <b>Canlı Başvuru Sıralaması:</b>\n"
         f"<i>(Henüz başvuru yapılmadı. İlk tıklayan görüşme hakkı kazanır.)</i>\n\n"
-        f"👇 <i>Aşağıdaki butona tıklayarak milisaniye hassasiyetli sıraya girebilirsiniz:</i>"
+        f"🚨 <b>ÖNEMLİ KURAL:</b> İlan sahibine harici özel mesaj atmak ve tarife altı teklifte bulunmak <b>DİREKT BAN</b> sebebidir!\n\n"
+        f"👇 <i>Yalnızca aşağıdaki butona tıklayarak adil sıraya giriniz:</i>"
     )
 
-    sent_msg = await message.reply(
-        text=reply_text,
-        reply_markup=build_apply_keyboard(listing.id),
-        parse_mode="HTML"
-    )
+    if is_deleted:
+        sent_msg = await message.bot.send_message(
+            chat_id=message.chat.id,
+            text=reply_text,
+            reply_markup=build_apply_keyboard(listing.id),
+            parse_mode="HTML"
+        )
+    else:
+        sent_msg = await message.reply(
+            text=reply_text,
+            reply_markup=build_apply_keyboard(listing.id),
+            parse_mode="HTML"
+        )
 
     listing.bot_reply_message_id = sent_msg.message_id
     await db.commit()
 
-    # 4. Admin Denetim Grubuna bilgilendirme geç
+    # 5. İlan Sahibine Özel Mesajla Doğrulama ve Güvenlik Uyarısı Gönder
+    try:
+        await message.bot.send_message(
+            chat_id=sender.id,
+            text=(
+                f"✅ <b>Tevkil İlanınız Yayınlandı (#{listing.id})</b>\n\n"
+                f"İlanınız grupta güvenli ve anonim olarak paylaşıldı.\n\n"
+                f"🛡️ <b>Güvenlik & Sıra Uyarısı:</b>\n"
+                f"• Gruptan profilinize tıklayıp 'hemen yaparım' vb. diyerek harici özel mesaj atanları <b>kesinlikle dikkate almayınız</b>.\n"
+                f"• Süreç yalnızca butona tıklayan 1. sıradaki meslektaşımızla bot üzerinden yürütülecektir.\n"
+                f"• Başvuru geldiğinde buradan anında bilgilendirileceksiniz."
+            ),
+            parse_mode="HTML"
+        )
+    except Exception:
+        pass
+
+    # 6. Admin Denetim Grubuna bilgilendirme geç
     await AuditService.notify_admin_event(
         bot=message.bot,
         text=(
             f"📢 <b>[YENİ İLAN TESPİT EDİLDİ]</b>\n"
             f"📋 <b>İlan ID:</b> #{listing.id}\n"
             f"👥 <b>Grup:</b> {message.chat.title} (<code>{message.chat.id}</code>)\n"
-            f"👤 <b>İlan Sahibi:</b> {sender.full_name} (@{sender.username or 'yok'}) [ID: <code>{sender.id}</code>]\n"
+            f"👤 <b>İlan Sahibi:</b> {sender.full_name} (@{sender.username or 'yok'}) [ID: <code>{sender.id}</code>] (⭐ {net_score} Puan)\n"
             f"📝 <b>İlan Metni:</b>\n{text[:500]}"
         )
     )

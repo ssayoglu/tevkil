@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Optional, List
 from sqlalchemy import (
-    BigInteger, Integer, String, Text, Boolean, DateTime, ForeignKey, Index
+    BigInteger, Integer, Float, String, Text, Boolean, DateTime, ForeignKey, Index
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from bot.database.connection import Base
@@ -20,8 +20,33 @@ class User(Base):
     banned_until: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     ban_reason: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
 
+    # Rank ve Ceza Puanı Sistemi
+    rank_score: Mapped[int] = mapped_column(Integer, default=100)  # Başlangıç: 100
+    penalty_points: Mapped[int] = mapped_column(Integer, default=0)
+    completed_tevkils_count: Mapped[int] = mapped_column(Integer, default=0)
+    cancelled_tevkils_count: Mapped[int] = mapped_column(Integer, default=0)
+
+    # Baro Levha Doğrulama
+    baro_name: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    baro_sicil_no: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    is_baro_verified: Mapped[bool] = mapped_column(Boolean, default=False)
+
     listings: Mapped[List["Listing"]] = relationship("Listing", back_populates="creator")
     applications: Mapped[List["Application"]] = relationship("Application", back_populates="user")
+    penalty_logs: Mapped[List["PenaltyLog"]] = relationship("PenaltyLog", back_populates="user")
+
+
+class PenaltyLog(Base):
+    __tablename__ = "penalty_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id"), index=True)
+    points: Mapped[int] = mapped_column(Integer)
+    reason: Mapped[str] = mapped_column(String(255))
+    issued_by: Mapped[str] = mapped_column(String(64), default="SYSTEM")  # SYSTEM veya ADMIN_<id>
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    user: Mapped["User"] = relationship("User", back_populates="penalty_logs")
 
 
 class Listing(Base):
@@ -57,6 +82,11 @@ class Application(Base):
     queue_number: Mapped[int] = mapped_column(Integer)
     applied_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
     
+    # Rank & Handikap Bilgileri
+    score_ms: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    user_rank_score: Mapped[int] = mapped_column(Integer, default=100)
+    handicap_level: Mapped[int] = mapped_column(Integer, default=0)
+    
     # Durumlar: WAITING, ACTIVE, ACCEPTED, REJECTED, PASSED
     status: Mapped[str] = mapped_column(String(32), default="WAITING")
     disagreement_reason: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
@@ -76,6 +106,7 @@ class BridgeSession(Base):
     listing_id: Mapped[int] = mapped_column(Integer, ForeignKey("listings.id"), index=True)
     creator_id: Mapped[int] = mapped_column(BigInteger, index=True)
     applicant_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    candidate_rank: Mapped[int] = mapped_column(Integer, default=1)
     
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     started_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
@@ -98,7 +129,7 @@ class MessageLog(Base):
     session_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     sender_id: Mapped[int] = mapped_column(BigInteger)
     sender_role: Mapped[str] = mapped_column(String(32))  # CREATOR, APPLICANT, ADMIN, SYSTEM
-    content_type: Mapped[str] = mapped_column(String(32))  # text, photo, document
+    content_type: Mapped[str] = mapped_column(String(32))  # text, photo, document, voice
     text_content: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     file_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     file_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)

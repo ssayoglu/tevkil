@@ -10,7 +10,7 @@ Sistemde açılan tüm tevkil ilanları, yapılan başvurular ve taraflar arası
 
 ### Log Formatı
 Grupta her mesaj şu başlıkla paylaşılır:
-```
+```text
 🛡️ [DENETİM LOGU — İlan #104]
 👤 Gönderen: İlan Sahibi - Av. Ahmet Yılmaz (@ahmetyilmaz) (ID: 123456789)
 🎯 Hedef: 1. Sıra Aday
@@ -20,7 +20,7 @@ Grupta her mesaj şu başlıkla paylaşılır:
 Dosya no: 2026/123 Esas, saat 10:00'daki duruşmaya yetki belgesiyle girilecek.
 ```
 
-Fotoğraf ve PDF dosyaları da orijinal halleriyle aynı başlıkla bu gruba kopyalanır.
+Fotoğraf, ses kaydı ve PDF dosyaları da orijinal halleriyle aynı başlıkla bu gruba kopyalanır.
 
 ---
 
@@ -29,53 +29,46 @@ Fotoğraf ve PDF dosyaları da orijinal halleriyle aynı başlıkla bu gruba kop
 Admin komutları doğrudan **Admin Denetim Grubu** içerisinden çalıştırılır.
 
 ### A. Görüşmeyi Durdurma (`/durdur`)
-* **Amaç:** Taraflar arasında tartışma, kurallara aykırı talep veya şüpheli bir durum tespit edildiğinde devam eden görüşmeyi tek komutla sonlandırmak.
-* **Kullanım:**
-  ```text
-  /durdur <ilan_id>
-  ```
-  *Örnek:* `/durdur 104`
-* **Sonuç:**
-  - Köprü anında kesilir, tarafların birbirine mesaj göndermesi engellenir.
-  - İlan sahibine ve adaya: *"Görüşme yöneticilerimiz tarafından denetim gereği sonlandırılmıştır"* mesajı gider.
-  - İlan durumu `CANCELLED_ADMIN` olarak kaydedilir.
-
----
+* **Kullanım:** `/durdur <ilan_id>`
+* **Sonuç:** Köprü anında kesilir, taraflara bildirilir ve ilan durumu `CANCELLED_ADMIN` olarak kaydedilir.
 
 ### B. Kullanıcı Kısıtlama / Ban (`/kullanici_kisitla`)
-* **Amaç:** Kural ihlali yapan, meslek etiğine uymayan veya sistemi kötüye kullanan kullanıcıyı geçici veya süreli olarak engellemek.
-* **Kullanım:**
-  ```text
-  /kullanici_kisitla <user_id> [gün_sayısı] [gerekçe]
-  ```
-  *Örnek:* `/kullanici_kisitla 123456789 5 Anlaşmazlık sonrası uygunsuz üslup`
-* **Sonuç:**
-  - Kullanıcı belirtilen gün boyunca grupta `tevkildir` ilanı açamaz ve ilanlara başvuramaz.
-  - Varsa devam eden aktif görüşmesi anında kesilir.
-  - Kullanıcıya kısıtlandığına dair gerekçeli bildirim iletilir.
-
----
+* **Kullanım:** `/kullanici_kisitla <user_id> [gün_sayısı] [gerekçe]`
+* *Örnek:* `/kullanici_kisitla 123456789 5 Anlaşmazlık sonrası uygunsuz üslup`
+* **Sonuç:** Kullanıcı belirtilen gün boyunca ilan açamaz ve başvuramaz.
 
 ### C. Kısıtlamayı Kaldırma (`/ceza_kaldir`)
-* **Amaç:** Süresi dolmadan önce yöneticinin inisiyatifiyle kısıtlamayı kaldırmak.
-* **Kullanım:**
-  ```text
-  /ceza_kaldir <user_id>
-  ```
-  *Örnek:* `/ceza_kaldir 123456789`
+* **Kullanım:** `/ceza_kaldir <user_id>`
 
----
+### D. Ceza Puanı Verme (`/ceza_puani_ver`)
+* **Kullanım:** `/ceza_puani_ver <user_id> <puan> [sebep]`
+* *Örnek:* `/ceza_puani_ver 123456789 15 Göreve mazeretsiz katılmama`
+* **Sonuç:** Kullanıcının ceza puanı artar ve başvuru sırasına kademeli handikap (1-4 sıra geriden başlama) eklenir.
 
-### D. Aktif Görüşmeleri Listeleme (`/aktif_ilanlar`)
-* **Amaç:** Şu anda devam eden tüm görüşmeleri, ilan ID'lerini ve ilk mesajın atılıp atılmadığını kontrol etmek.
-* **Kullanım:**
-  ```text
-  /aktif_ilanlar
-  ```
+### E. Rank Puanı Ekleme (`/puan_ekle`)
+* **Kullanım:** `/puan_ekle <user_id> <puan>`
+
+### F. Kullanıcı Bilgi Kartı (`/kullanici_bilgi`)
+* **Kullanım:** `/kullanici_bilgi <user_id>`
+* **Sonuç:** Kullanıcının rank puanı, ceza puanı, handikap seviyesi, baro sicili ve geçmiş işlem istatistikleri dökülür.
+
+### G. İlan Detayı İnceleme (`/ilan_detay`)
+* **Kullanım:** `/ilan_detay <ilan_id>`
+* **Sonuç:** İlan sahibi, sıradaki tüm başvuranlar ve loglanan mesaj sayıları görüntülenir.
+
+### H. Aktif Görüşmeleri Listeleme (`/aktif_ilanlar`)
+* **Kullanım:** `/aktif_ilanlar`
+
+### I. Yasaklı Kullanıcıları Listeleme (`/kara_liste`)
+* **Kullanım:** `/kara_liste`
+
+### J. Sistem İstatistikleri (`/istatistik`)
+* **Kullanım:** `/istatistik`
 
 ---
 
 ## 3. Otomatik İşleyen Sistem Kuralları
 
-1. **30 Dakika Kuralı:** İlan sahibi 1. adayla eşleştikten sonra 30 dakika içinde ilk mesajı atmazsa bot ilanı iptal eder, ilan sahibini otomatik **5 gün** kısıtlar ve gruba iptal duyurusu geçer.
-2. **Anlaşamama & Sıra Devri:** İlan sahibi `[Anlaşamadık]` seçip sebep olarak **Ücret harici** (Mesafe, Kıdem vb.) bir gerekçe bildirdiğinde sistem otomatik olarak 2. adaya devir teklifi götürür.
+1. **30 Dakika Kuralı:** İlan sahibi 1. adayla eşleştikten sonra 30 dakika içinde ilk mesajı atmazsa bot ilanı iptal eder, ilan sahibini otomatik **5 gün** kısıtlar, **+20 Ceza Puanı** işler ve gruba iptal duyurusu geçer.
+2. **Anlaşamama & Zincirleme Sıra Devri:** İlan sahibi `[Anlaşamadık]` seçip sebep olarak **Ücret harici** (Mesafe, Kıdem vb.) bir gerekçe bildirdiğinde sistem otomatik olarak sıradaki adaya devir teklifi götürür; ret durumunda yedek sıradaki sonraki adaylara zincirleme aktarılır.
+3. **Başarılı Tevkil Ödülü:** `[🤝 Anlaştık]` teyidinde her iki tarafın hesabına **+5 Rank Puanı** eklenir.

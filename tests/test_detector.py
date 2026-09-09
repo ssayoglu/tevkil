@@ -2,16 +2,38 @@ import pytest
 from bot.handlers.group_detector import is_tevkil_message
 
 
-def test_tevkil_detection_positive():
+def test_tevkil_detection_positive_tevkildir():
     assert is_tevkil_message("İstanbul Çağlayan Adliyesi için tevkildir.")
     assert is_tevkil_message("Acil TEVKİLDİR arkadaşlar")
     assert is_tevkil_message("Tevkildir: Yarın saat 10:00 Kartal 2. Asliye Ceza")
     assert is_tevkil_message("Bu iş bir tevkildir, detaylar özelden")
 
 
-def test_tevkil_detection_negative():
-    assert not is_tevkil_message("Tevkil arayan var mı?")
-    assert not is_tevkil_message("Merhaba iyi çalışmalar dilerim")
+def test_tevkil_detection_positive_courthouses_with_context():
+    # Kullanıcının verdiği örnek 1: Bursa
+    assert is_tevkil_message("Bursa için yarın 4.10 duruşmasına katılacak var mı?")
+    
+    # Kullanıcının verdiği örnek 2: Bayramiç (Çanakkale ilçesi)
+    assert is_tevkil_message("bayramiç devlet kurumuna evrak teslim edilecek, bir meslektaşımız var mı acaba?")
+    
+    # Diğer il / ilçe adliyeleri
+    assert is_tevkil_message("Yarın Çağlayan 3. Asliye Hukuk duruşmasına girebilecek meslektaş aranıyor")
+    assert is_tevkil_message("Bodrum adliyesinde dosya inceleyecek avukat var mı?")
+    assert is_tevkil_message("Çorlu icra müdürlüğünde hacze gidebilecek meslektaşımız var mıdır?")
+    assert is_tevkil_message("Kuşadası mahkemesinde yetki belgesiyle duruşmaya katılacak meslektaş aranmaktadır")
+
+
+def test_tevkil_detection_negative_exceptions():
+    # Kullanıcının şartı: "içerisinde tevkil değildir geçiyorsa saymayalım"
+    assert not is_tevkil_message("Bu iş bir tevkil değildir, sadece bilgi amaçlı paylaşımdır.")
+    assert not is_tevkil_message("Bursa duruşması hakkında bilgi, tevkil değildir.")
+    assert not is_tevkil_message("Tevkil değil sadece bir soru sormak istemiştim.")
+    assert not is_tevkil_message("Tevkildir değildir")
+
+
+def test_tevkil_detection_negative_general():
+    assert not is_tevkil_message("Merhaba herkese iyi çalışmalar dilerim.")
     assert not is_tevkil_message("")
     assert not is_tevkil_message(None)
-    assert not is_tevkil_message("tevkildirr")  # Kelime sınırı kontrolü
+    assert not is_tevkil_message("Bursa'da hava çok güzel.")  # Adliye var ama görev/tevkil bağlamı yok
+    assert not is_tevkil_message("tevkildirr")

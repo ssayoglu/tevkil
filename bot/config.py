@@ -17,6 +17,7 @@ class Settings(BaseSettings):
 
     timeout_minutes: int = Field(30, alias="TIMEOUT_MINUTES")
     ban_duration_days: int = Field(5, alias="BAN_DURATION_DAYS")
+    tariff_ban_duration_days: int = Field(15, alias="TARIFF_BAN_DURATION_DAYS")  # Tarife altı teklif doğrudan ban süresi (gün)
     timezone: str = Field("Europe/Istanbul", alias="TIMEZONE")
 
     model_config = SettingsConfigDict(

@@ -7,10 +7,12 @@ from aiogram.enums import ParseMode
 from bot.config import settings
 from bot.database.connection import init_db
 from bot.services.redis_queue import redis_client
+from bot.services.timeout_service import TimeoutService
 from bot.middlewares.db_session import DbSessionMiddleware
 from bot.middlewares.blacklist_check import BlacklistMiddleware
 from bot.handlers import (
     admin_panel,
+    user_panel,
     group_detector,
     application,
     confirmation,
@@ -53,16 +55,24 @@ async def main():
 
     # Routers Kaydı
     dp.include_router(admin_panel.router)
+    dp.include_router(user_panel.router)
     dp.include_router(group_detector.router)
     dp.include_router(application.router)
     dp.include_router(confirmation.router)
     dp.include_router(bridge_chat.router)
 
     logger.info(f"Bot çalışmaya hazır. Admin Grubu: {settings.admin_chat_id}")
-    
-    # Eski bekleyen güncellemeleri temizle ve polling başlat
-    await bot.delete_webhook(drop_pending_updates=True)
-    await dp.start_polling(bot)
+
+    # Arka plan periyodik zaman aşımı kontrol görevini başlat
+    timeout_task = asyncio.create_task(TimeoutService.run_periodic_timeout_checker(bot, interval_seconds=60))
+
+    try:
+        # Eski bekleyen güncellemeleri temizle ve polling başlat
+        await bot.delete_webhook(drop_pending_updates=True)
+        await dp.start_polling(bot)
+    finally:
+        timeout_task.cancel()
+        await bot.session.close()
 
 
 if __name__ == "__main__":

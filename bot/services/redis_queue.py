@@ -9,16 +9,21 @@ redis_client = aioredis.from_url(settings.redis_url, decode_responses=True)
 
 class RedisQueueService:
     @staticmethod
-    async def add_applicant(listing_id: int, user_id: int, user_data: Dict[str, Any]) -> Tuple[bool, int, float]:
+    async def add_applicant(
+        listing_id: int,
+        user_id: int,
+        user_data: Dict[str, Any],
+        custom_score_ms: Optional[float] = None
+    ) -> Tuple[bool, int, float]:
         """
-        Kullanıcıyı milisaniye hassasiyetli Sorted Set'e ekler.
-        Dönüş: (is_new: bool, rank: int, timestamp_ms: float)
+        Kullanıcıyı milisaniye (ve varsa handikap) skoruyla Sorted Set'e ekler.
+        Dönüş: (is_new: bool, rank: int, applied_score_ms: float)
         """
-        now_ms = time.time() * 1000.0  # Milisaniye hassasiyeti
+        now_ms = custom_score_ms if custom_score_ms is not None else (time.time() * 1000.0)
         key = f"listing:{listing_id}:applicants"
         info_key = f"user_info:{user_id}"
 
-        # Kullanıcı bilgilerini sakla
+        # Kullanıcı detaylarını sakla
         await redis_client.set(info_key, json.dumps(user_data), ex=86400 * 7)
 
         # ZADD ile ekle (NX=True: Sadece daha önce eklenmemişse ekle)
@@ -44,7 +49,7 @@ class RedisQueueService:
     @staticmethod
     async def get_all_applicants(listing_id: int) -> List[Dict[str, Any]]:
         """
-        Tüm başvuranları milisaniye sırasına göre kullanıcı bilgileriyle döndürür.
+        Tüm başvuranları milisaniye sırasına göre kullanıcı ve rank puanı bilgileriyle döndürür.
         """
         key = f"listing:{listing_id}:applicants"
         items = await redis_client.zrange(key, 0, -1, withscores=True)
@@ -59,9 +64,13 @@ class RedisQueueService:
             results.append({
                 "rank": index,
                 "user_id": user_id,
-                "score_ms": score,
+                "score_ms": float(score),
                 "full_name": user_info.get("full_name", f"Kullanıcı {user_id}"),
                 "username": user_info.get("username"),
+                "rank_score": user_info.get("rank_score", 100),
+                "penalty_points": user_info.get("penalty_points", 0),
+                "handicap_level": user_info.get("handicap_level", 0),
+                "is_baro_verified": user_info.get("is_baro_verified", False),
             })
         return results
 
@@ -77,10 +86,12 @@ class RedisQueueService:
     @staticmethod
     async def get_next_available_applicant(listing_id: int, current_rank: int) -> Optional[Tuple[int, float, int]]:
         """
-        current_rank sonrasındaki sıradaki adayı getirir.
+        current_rank (1-based) sonrasındaki sıradaki adayı getirir.
+        Örneğin current_rank=1 ise index 1'deki adayı (2. sıra) getirir.
         Dönüş: (user_id, score_ms, new_rank)
         """
         key = f"listing:{listing_id}:applicants"
+        # 1-based current_rank için index = current_rank (yani 1. adayın sonrası index 1)
         items = await redis_client.zrange(key, current_rank, current_rank, withscores=True)
         if items:
             uid, score = items[0]
