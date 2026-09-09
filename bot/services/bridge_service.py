@@ -1,7 +1,7 @@
 from typing import Optional, Dict, Any
 from datetime import datetime, timedelta
 from aiogram import Bot
-from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 from sqlalchemy import select, update
 from bot.config import settings
 from bot.database.connection import AsyncSessionLocal
@@ -13,7 +13,7 @@ from bot.services.timeout_service import TimeoutService
 
 def get_confirmation_keyboard(listing_id: int) -> InlineKeyboardMarkup:
     """
-    İlan sahibinin ekranındaki [Anlaştık] ve [Anlaşamadık] butonları
+    İlan sahibinin ve adayın ekranındaki [Anlaştık] ve [Anlaşamadık] inline butonları
     """
     kb = [
         [
@@ -22,6 +22,23 @@ def get_confirmation_keyboard(listing_id: int) -> InlineKeyboardMarkup:
         ]
     ]
     return InlineKeyboardMarkup(inline_keyboard=kb)
+
+
+def get_bridge_reply_keyboard() -> ReplyKeyboardMarkup:
+    """
+    Görüşme boyunca ekranın en altında sabit duran hızlı durum/onay menüsü
+    """
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [
+                KeyboardButton(text="🤝 Anlaştık"),
+                KeyboardButton(text="❌ Anlaşamadık")
+            ]
+        ],
+        resize_keyboard=True,
+        persistent=True,
+        input_field_placeholder="Mesajınızı yazın veya butonları kullanın..."
+    )
 
 
 class BridgeService:
@@ -107,15 +124,15 @@ class BridgeService:
                     f"aksi halde ilanınız iptal edilecek, hesabınıza +20 Ceza Puanı eklenecek ve 5 gün kısıtlanacaktır.\n\n"
                     f"🛡️ <b>Güvenlik Uyarısı:</b> Gruptan profilinize tıklayıp 'hemen yaparım' diyerek "
                     f"özelden yazanları dikkate almayınız. Tüm süreci bu bot üzerinden yürütünüz.\n\n"
-                    f"Görüşme tamamlandığında aşağıdaki butonlardan durumu teyit edebilirsiniz:"
+                    f"👇 <i>Görüşme boyunca ekranınızın altındaki <b>[🤝 Anlaştık]</b> ve <b>[❌ Anlaşamadık]</b> butonlarını dilediğiniz an kullanabilirsiniz.</i>"
                 ),
-                reply_markup=get_confirmation_keyboard(listing_id),
+                reply_markup=get_bridge_reply_keyboard(),
                 parse_mode="HTML"
             )
         except Exception as e:
-            print(f"[BridgeService] İlan sahibine başlatma mesajı gönderilemedi (Kullanıcı botu başlatmamış olabilir): {e}")
+            print(f"[BridgeService] İlan sahibine başlatma mesajı gönderilemedi: {e}")
 
-        # 3. Adaya DM Bildirimi (Anlaştık / Anlaşamadık butonlarıyla birlikte)
+        # 2. Adaya DM Bildirimi
         try:
             await bot.send_message(
                 chat_id=applicant_id,
@@ -123,15 +140,15 @@ class BridgeService:
                     f"🎉 <b>Tevkil İçin {candidate_rank}. Sıradan Seçildiniz. (İlan #{listing_id})</b>\n\n"
                     f"İlan sahibi meslektaşımız ile anonim görüşme kanalınız açılmıştır.\n"
                     f"💬 Buradan yazacağınız tüm mesajlar, fotoğraflar, ses kayıtları ve PDF dosyaları anonim olarak iletilir.\n\n"
-                    f"Görüşme tamamlandığında veya vazgeçmek istediğinizde aşağıdaki butonları kullanabilirsiniz:"
+                    f"👇 <i>Görüşme boyunca ekranınızın altındaki <b>[🤝 Anlaştık]</b> ve <b>[❌ Anlaşamadık]</b> butonlarını dilediğiniz an kullanabilirsiniz.</i>"
                 ),
-                reply_markup=get_confirmation_keyboard(listing_id),
+                reply_markup=get_bridge_reply_keyboard(),
                 parse_mode="HTML"
             )
         except Exception as e:
-            print(f"[BridgeService] Adaya başlatma mesajı gönderilemedi (Kullanıcı botu başlatmamış olabilir): {e}")
+            print(f"[BridgeService] Adaya başlatma mesajı gönderilemedi: {e}")
 
-        # 4. Admin grubuna bildirim
+        # 3. Admin grubuna bildirim
         await AuditService.notify_admin_event(
             bot,
             f"🔗 <b>[KÖPRÜ BAŞLATILDI — İlan #{listing_id}]</b>\n"

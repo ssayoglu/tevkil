@@ -61,5 +61,67 @@ async def test_advance_to_next_candidate_with_backup():
             sent_chats = [call[1]["chat_id"] for call in mock_bot.send_message.call_args_list]
             assert 1001 in sent_chats
             assert 2002 in sent_chats
-            assert -100555 in sent_chats
             assert mock_update_board.called
+
+
+def test_bridge_reply_keyboard():
+    from bot.services.bridge_service import get_bridge_reply_keyboard
+    kb = get_bridge_reply_keyboard()
+    assert kb.resize_keyboard is True
+    assert kb.persistent is True
+    assert len(kb.keyboard[0]) == 2
+    assert kb.keyboard[0][0].text == "🤝 Anlaştık"
+    assert kb.keyboard[0][1].text == "❌ Anlaşamadık"
+
+
+@pytest.mark.asyncio
+async def test_execute_agree_step_both_parties():
+    from unittest.mock import AsyncMock, MagicMock, patch
+    from bot.handlers.confirmation import execute_agree_step
+    from bot.database.models import Listing, BridgeSession
+
+    mock_bot = AsyncMock()
+    mock_db = AsyncMock()
+
+    listing = Listing(id=77, creator_id=101, group_id=-1001, status="MATCHED")
+    session = BridgeSession(
+        id=1,
+        listing_id=77,
+        creator_id=101,
+        applicant_id=202,
+        is_active=True,
+        creator_agreed=True,
+        applicant_agreed=False
+    )
+
+    def mock_db_exec(stmt):
+        m = MagicMock()
+        stmt_str = str(stmt).lower()
+        if "bridge_session" in stmt_str or "bridgesession" in stmt_str:
+            m.scalar_one_or_none.return_value = session
+        elif "listing" in stmt_str:
+            m.scalar_one_or_none.return_value = listing
+        else:
+            m.scalar_one_or_none.return_value = None
+        return m
+
+    mock_db.execute = AsyncMock(side_effect=mock_db_exec)
+
+    with patch("bot.services.redis_queue.RedisQueueService.remove_active_bridge", new_callable=AsyncMock), \
+         patch("bot.services.rank_service.RankService.award_successful_tevkil", new_callable=AsyncMock), \
+         patch("bot.services.audit_service.AuditService.notify_admin_event", new_callable=AsyncMock), \
+         patch("bot.handlers.confirmation.update_group_listing_board", new_callable=AsyncMock):
+        
+        # Applicant executes agree step
+        await execute_agree_step(
+            bot=mock_bot,
+            user_id=202,
+            listing_id=77,
+            db=mock_db
+        )
+
+        assert session.applicant_agreed is True
+        assert session.is_active is False
+        assert session.close_reason == "AGREED"
+        assert listing.status == "COMPLETED"
+

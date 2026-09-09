@@ -1,6 +1,7 @@
+from typing import Optional
 from datetime import datetime, timedelta
 from aiogram import Router, F
-from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardRemove, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update
 from bot.config import settings
@@ -59,11 +60,18 @@ def get_disagreement_admin_keyboard(creator_id: int, applicant_id: int) -> Inlin
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-@router.callback_query(F.data.startswith("agree:"))
-async def handle_agree(callback: CallbackQuery, db: AsyncSession):
-    listing_id = int(callback.data.split(":")[1])
-    user = callback.from_user
-
+async def execute_agree_step(
+    bot,
+    user_id: int,
+    listing_id: int,
+    db: AsyncSession,
+    callback: Optional[CallbackQuery] = None,
+    message: Optional[Message] = None
+):
+    """
+    Hem inline callback butonundan hem de DM metin/komut tetikleyicilerinden
+    çağrılabilen çift taraflı anlaşma doğrulama ve sonuçlandırma fonksiyonu.
+    """
     stmt = select(Listing).where(Listing.id == listing_id)
     res = await db.execute(stmt)
     listing = res.scalar_one_or_none()
@@ -77,16 +85,25 @@ async def handle_agree(callback: CallbackQuery, db: AsyncSession):
     session = s_res.scalar_one_or_none()
 
     if not session:
-        await callback.answer("⚠️ Bu görüşme zaten tamamlanmış veya kapatılmıştır.", show_alert=True)
+        msg_text = "⚠️ Bu görüşme zaten tamamlanmış veya kapatılmıştır."
+        if callback:
+            await callback.answer(msg_text, show_alert=True)
+        elif message:
+            await message.reply(msg_text)
         return
 
-    if user.id not in [session.creator_id, session.applicant_id]:
-        await callback.answer("⚠️ Sadece bu tevkil görüşmesinde aktif olan taraflar onay verebilir.", show_alert=True)
+    if user_id not in [session.creator_id, session.applicant_id]:
+        msg_text = "⚠️ Sadece bu tevkil görüşmesinde aktif olan taraflar onay verebilir."
+        if callback:
+            await callback.answer(msg_text, show_alert=True)
+        elif message:
+            await message.reply(msg_text)
         return
 
-    await callback.answer()
+    if callback:
+        await callback.answer()
 
-    is_creator = (user.id == session.creator_id)
+    is_creator = (user_id == session.creator_id)
     if is_creator:
         session.creator_agreed = True
     else:
@@ -123,22 +140,36 @@ async def handle_agree(callback: CallbackQuery, db: AsyncSession):
         await RedisQueueService.remove_active_bridge(session.creator_id)
         await RedisQueueService.remove_active_bridge(session.applicant_id)
 
-        # Butona basan tarafa bildirim
+        # Onaylayan tarafa bildirim + persistent menüyü kaldır
+        user_success_text = (
+            f"🤝 <b>Tevkil Anlaşması Karşılıklı Onaylandı!</b>\n\n"
+            f"#{listing_id} numaralı tevkil ilanı için her iki meslektaşımız da anlaşmayı teyit etmiştir.\n"
+            f"⭐ Başarılı işlem için hesabınıza <b>+{RankService.POINTS_PER_SUCCESSFUL_TEVKIL} Rank Puanı</b> eklendi.\n"
+            f"Görüşme güvenli şekilde tamamlanmıştır. İyi çalışmalar dileriz."
+        )
         try:
-            await callback.message.edit_text(
-                f"🤝 <b>Tevkil Anlaşması Karşılıklı Onaylandı!</b>\n\n"
-                f"#{listing_id} numaralı tevkil ilanı için her iki meslektaşımız da anlaşmayı teyit etmiştir.\n"
-                f"⭐ Başarılı işlem için hesabınıza <b>+{RankService.POINTS_PER_SUCCESSFUL_TEVKIL} Rank Puanı</b> eklendi.\n"
-                f"Görüşme güvenli şekilde tamamlanmıştır. İyi çalışmalar dileriz.",
-                parse_mode="HTML"
-            )
+            if callback and callback.message:
+                await callback.message.edit_text(user_success_text, parse_mode="HTML")
+                await bot.send_message(
+                    chat_id=user_id,
+                    text="✨ <i>Görüşme başarıyla tamamlandı.</i>",
+                    reply_markup=ReplyKeyboardRemove(),
+                    parse_mode="HTML"
+                )
+            else:
+                await bot.send_message(
+                    chat_id=user_id,
+                    text=user_success_text,
+                    reply_markup=ReplyKeyboardRemove(),
+                    parse_mode="HTML"
+                )
         except Exception:
             pass
 
-        # Diğer tarafa bildirim
+        # Diğer tarafa bildirim + persistent menüyü kaldır
         partner_id = session.applicant_id if is_creator else session.creator_id
         try:
-            await callback.bot.send_message(
+            await bot.send_message(
                 chat_id=partner_id,
                 text=(
                     f"🤝 <b>Tebrikler! Tevkil Anlaşması Karşılıklı Onaylandı!</b>\n\n"
@@ -146,6 +177,7 @@ async def handle_agree(callback: CallbackQuery, db: AsyncSession):
                     f"⭐ Başarılı tevkil için hesabınıza <b>+{RankService.POINTS_PER_SUCCESSFUL_TEVKIL} Rank Puanı</b> eklendi.\n"
                     f"Görüşme tamamlanmıştır. Görevinizde başarılar dileriz."
                 ),
+                reply_markup=ReplyKeyboardRemove(),
                 parse_mode="HTML"
             )
         except Exception:
@@ -154,7 +186,7 @@ async def handle_agree(callback: CallbackQuery, db: AsyncSession):
         # Ana gruba sonuç bildirimi
         if listing and listing.group_id:
             try:
-                await callback.bot.send_message(
+                await bot.send_message(
                     chat_id=listing.group_id,
                     text=(
                         f"✅ <b>Tevkil Başarıyla Sonuçlandı</b>\n\n"
@@ -167,11 +199,11 @@ async def handle_agree(callback: CallbackQuery, db: AsyncSession):
                 pass
 
             # Gruptaki panoyu güncelle
-            await update_group_listing_board(callback.bot, listing, db=db)
+            await update_group_listing_board(bot, listing, db=db)
 
         # Admin grubuna rapor
         await AuditService.notify_admin_event(
-            bot=callback.bot,
+            bot=bot,
             text=(
                 f"✅ <b>[KARŞILIKLI ANLAŞMA SAĞLANDI]</b>\n"
                 f"📋 <b>İlan ID:</b> #{listing_id}\n"
@@ -185,27 +217,29 @@ async def handle_agree(callback: CallbackQuery, db: AsyncSession):
     else:
         # Tek taraf onayladı, karşı tarafın onayı bekleniyor
         partner_id = session.applicant_id if is_creator else session.creator_id
-        
+        wait_text = (
+            f"⏳ <b>Anlaşma Onayınız Alındı</b>\n\n"
+            f"#{listing_id} numaralı tevkil için anlaşma teyidiniz sisteme kaydedildi.\n"
+            f"ℹ️ Sürecin tamamlanıp puanların tanımlanması için <b>karşı meslektaşımızın da [🤝 Anlaştık] butonuna basması bekleniyor...</b>\n\n"
+            f"<i>Fikriniz değişirse veya anlaşmazlık çıkarsa iptal edebilirsiniz:</i>"
+        )
+        wait_kb = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(text="❌ Anlaşamadık / İptal Et", callback_data=f"disagree:{listing_id}")
+                ]
+            ]
+        )
         try:
-            await callback.message.edit_text(
-                f"⏳ <b>Anlaşma Onayınız Alındı</b>\n\n"
-                f"#{listing_id} numaralı tevkil için anlaşma teyidiniz sisteme kaydedildi.\n"
-                f"ℹ️ Sürecin tamamlanıp puanların tanımlanması için <b>karşı meslektaşımızın da [🤝 Anlaştık] butonuna basması bekleniyor...</b>\n\n"
-                f"<i>Fikriniz değişirse veya anlaşmazlık çıkarsa iptal edebilirsiniz:</i>",
-                reply_markup=InlineKeyboardMarkup(
-                    inline_keyboard=[
-                        [
-                            InlineKeyboardButton(text="❌ Anlaşamadık / İptal Et", callback_data=f"disagree:{listing_id}")
-                        ]
-                    ]
-                ),
-                parse_mode="HTML"
-            )
+            if callback and callback.message:
+                await callback.message.edit_text(wait_text, reply_markup=wait_kb, parse_mode="HTML")
+            else:
+                await bot.send_message(chat_id=user_id, text=wait_text, reply_markup=wait_kb, parse_mode="HTML")
         except Exception:
             pass
 
         try:
-            await callback.bot.send_message(
+            await bot.send_message(
                 chat_id=partner_id,
                 text=(
                     f"🔔 <b>Meslektaşınız Anlaşmayı Onayladı! (#{listing_id})</b>\n\n"
@@ -224,6 +258,18 @@ async def handle_agree(callback: CallbackQuery, db: AsyncSession):
             )
         except Exception:
             pass
+
+
+@router.callback_query(F.data.startswith("agree:"))
+async def handle_agree(callback: CallbackQuery, db: AsyncSession):
+    listing_id = int(callback.data.split(":")[1])
+    await execute_agree_step(
+        bot=callback.bot,
+        user_id=callback.from_user.id,
+        listing_id=listing_id,
+        db=db,
+        callback=callback
+    )
 
 
 @router.callback_query(F.data.startswith("disagree:"))
@@ -494,6 +540,7 @@ async def handle_reason_selected(callback: CallbackQuery, db: AsyncSession):
                     f"• Kısıtlama Bitiş Tarihi: {format_date_short_tr(ban_until)}\n\n"
                     f"<i>Meslek onuruna ve baro asgari ücret tarifelerine uyulması zorunludur.</i>"
                 ),
+                reply_markup=ReplyKeyboardRemove(),
                 parse_mode="HTML"
             )
         except Exception as e:
@@ -506,6 +553,15 @@ async def handle_reason_selected(callback: CallbackQuery, db: AsyncSession):
             f"ve durum Admin Denetim Grubu'na yüksek öncelikle iletilmiştir.",
             parse_mode="HTML"
         )
+        try:
+            await callback.bot.send_message(
+                chat_id=reporter_id,
+                text="ℹ️ <i>Görüşme sonlandırıldı.</i>",
+                reply_markup=ReplyKeyboardRemove(),
+                parse_mode="HTML"
+            )
+        except Exception:
+            pass
 
         # Admin Denetim Grubuna Yüksek Öncelikli Alarm
         admin_alert = (
@@ -526,6 +582,15 @@ async def handle_reason_selected(callback: CallbackQuery, db: AsyncSession):
             f"Gerekçe: <b>{reason_text}</b> olarak kaydedildi ve admin denetimine iletildi.",
             parse_mode="HTML"
         )
+        try:
+            await callback.bot.send_message(
+                chat_id=callback.from_user.id,
+                text="ℹ️ <i>Görüşme sonlandırıldı.</i>",
+                reply_markup=ReplyKeyboardRemove(),
+                parse_mode="HTML"
+            )
+        except Exception:
+            pass
 
         # Karşı tarafa bilgi ver
         partner_id = session.applicant_id if callback.from_user.id == session.creator_id else session.creator_id
@@ -536,6 +601,7 @@ async def handle_reason_selected(callback: CallbackQuery, db: AsyncSession):
                     f"ℹ️ <b>Görüşme Sonlandırıldı</b>\n\n"
                     f"#{listing_id} numaralı tevkil ilanı için görüşme meslektaşınız tarafından ({reason_text}) gerekçesiyle kapatılmıştır."
                 ),
+                reply_markup=ReplyKeyboardRemove(),
                 parse_mode="HTML"
             )
         except Exception:

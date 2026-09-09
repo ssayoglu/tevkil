@@ -130,6 +130,7 @@ class TimeoutService:
                     f"• Hesabınıza <b>+{RankService.POINTS_PER_TIMEOUT_PENALTY} Ceza Puanı</b> işlenmiştir.\n"
                     f"• Kısıtlama Bitiş: {format_date_short_tr(ban_until)}"
                 ),
+                reply_markup=ReplyKeyboardRemove(),
                 parse_mode="HTML"
             )
         except Exception as e:
@@ -144,6 +145,7 @@ class TimeoutService:
                     f"#{listing_id} numaralı ilanın sahibi 30 dakika içerisinde görevin detaylarını "
                     f"iletmediği için ilan sistem tarafından otomatik olarak iptal edilmiştir."
                 ),
+                reply_markup=ReplyKeyboardRemove(),
                 parse_mode="HTML"
             )
         except Exception as e:
