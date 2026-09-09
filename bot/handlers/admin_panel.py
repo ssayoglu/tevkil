@@ -143,6 +143,10 @@ async def cmd_admin_help(message: Message):
 
     text = (
         "🛠️ <b>ADMİN DENETİM PANELİ KOMUTLARI</b>\n\n"
+        "• <code>#x log</code> veya <code>/log &lt;ilan_id&gt;</code>\n"
+        "  İlanın tüm mesaj ve denetim loglarını döker (Loglar 3 ay / 90 gün saklanır).\n\n"
+        "• <code>@kullanici kimdir</code> veya <code>/kimdir &lt;user_id&gt;</code>\n"
+        "  Kullanıcının kimlik, rank, ceza, baro ve ihlal geçmişini gösterir.\n\n"
         "• <code>/tum_kisitlari_kaldir</code> (veya <code>/sifirla</code>)\n"
         "  Test modunda tüm kullanıcıların kısıtlamalarını ve aktif köprü oturumlarını anında sıfırlar.\n\n"
         "• <code>/durdur &lt;ilan_id&gt;</code>\n"
@@ -157,8 +161,6 @@ async def cmd_admin_help(message: Message):
         "  Kullanıcıya ceza puanı işler (sıra handikapını artırır).\n\n"
         "• <code>/puan_ekle &lt;user_id&gt; &lt;puan&gt;</code>\n"
         "  Kullanıcının rank puanını artırır.\n\n"
-        "• <code>/kullanici_bilgi &lt;user_id&gt;</code> veya <code>@kullanici kimdir</code>\n"
-        "  Kullanıcının rank, ceza, kısıtlama ve tevkil geçmişini gösterir.\n\n"
         "• <code>/ilan_detay &lt;ilan_id&gt;</code>\n"
         "  İlanın tüm başvuru kuyruğunu ve denetim özetini gösterir.\n\n"
         "• <code>/aktif_ilanlar</code>\n"
@@ -564,6 +566,152 @@ async def render_user_profile_dossier(user: User, db: AsyncSession) -> str:
     )
 
 
+async def get_listing_queue_text(listing_id: int, db: AsyncSession) -> str:
+    l_stmt = select(Listing).where(Listing.id == listing_id)
+    l_res = await db.execute(l_stmt)
+    listing = l_res.scalar_one_or_none()
+
+    if not listing:
+        return "❌ İlan bulunamadı."
+
+    app_stmt = select(Application).where(Application.listing_id == listing_id).order_by(Application.queue_number)
+    app_res = await db.execute(app_stmt)
+    apps = app_res.scalars().all()
+
+    log_stmt = select(func.count(MessageLog.id)).where(MessageLog.listing_id == listing_id)
+    log_count = (await db.execute(log_stmt)).scalar() or 0
+
+    lines = [
+        f"📋 <b>İLAN DETAYI VE BAŞVURU KUYRUĞU (#{listing.id})</b>",
+        f"• <b>Durum:</b> <code>{listing.status}</code>",
+        f"• <b>Grup:</b> {listing.group_title or 'Grup'} (<code>{listing.group_id}</code>)",
+        f"• <b>İlan Sahibi ID:</b> <code>{listing.creator_id}</code>",
+        f"• <b>Açılış Tarihi:</b> {format_datetime_tr(listing.created_at)}",
+        f"• <b>Denetim Log Sayısı:</b> {log_count} Mesaj/Dosya (3 Aylık Arşiv)\n",
+        f"👥 <b>Başvuru Kuyruğu ({len(apps)} Kişi):</b>"
+    ]
+
+    for a in apps:
+        lines.append(f"  {a.queue_number}. User ID: <code>{a.user_id}</code> | Durum: <code>{a.status}</code> (⭐ {a.user_rank_score} Puan)")
+
+    lines.append(f"\n📝 <b>İlan Metni:</b>\n<i>{listing.raw_text[:300]}</i>")
+    return "\n".join(lines)
+
+
+async def render_listing_logs_dossier(listing_id: int, db: AsyncSession):
+    l_stmt = select(Listing).where(Listing.id == listing_id)
+    l_res = await db.execute(l_stmt)
+    listing = l_res.scalar_one_or_none()
+
+    if not listing:
+        return None, None
+
+    u_stmt = select(User).where(User.id == listing.creator_id)
+    creator = (await db.execute(u_stmt)).scalar_one_or_none()
+    creator_name = creator.full_name if creator and creator.full_name else f"Kullanıcı {listing.creator_id}"
+    creator_uname = f"@{creator.username}" if creator and creator.username else "Yok"
+
+    s_stmt = select(BridgeSession).where(BridgeSession.listing_id == listing_id).order_by(BridgeSession.id.desc())
+    s_res = await db.execute(s_stmt)
+    session = s_res.scalar_one_or_none()
+
+    applicant_user = None
+    if session:
+        app_u_stmt = select(User).where(User.id == session.applicant_id)
+        applicant_user = (await db.execute(app_u_stmt)).scalar_one_or_none()
+
+    applicant_name = applicant_user.full_name if applicant_user and applicant_user.full_name else (f"Kullanıcı {session.applicant_id}" if session else "Henüz Yok")
+    applicant_uname = f"@{applicant_user.username}" if applicant_user and applicant_user.username else "Yok"
+
+    log_stmt = select(MessageLog).where(MessageLog.listing_id == listing_id).order_by(MessageLog.sent_at.asc(), MessageLog.id.asc())
+    log_res = await db.execute(log_stmt)
+    logs = log_res.scalars().all()
+
+    status_tr_map = {
+        "OPEN": "🟢 Açık (Başvuru Bekliyor)",
+        "MATCHED": "🟡 Eşleşti (Köprü Görüşmesi Aktif)",
+        "COMPLETED": "✅ Tamamlandı (Başarıyla Anlaşıldı)",
+        "CANCELLED_TIMEOUT": "⏰ Zaman Aşımı ile İptal (30 Dk Kuralı)",
+        "CANCELLED_DISAGREED": "❌ Anlaşılamadı (İptal Edildi)",
+        "CLOSED_DISAGREED": "❌ Adaylarla Anlaşılamadı (Kapatıldı)",
+        "CANCELLED_ADMIN": "🛑 Yönetici Müdahalesiyle Durduruldu",
+        "CANCELLED_USER": "🚫 İlan Sahibi Tarafından İptal Edildi"
+    }
+    status_text = status_tr_map.get(listing.status, listing.status)
+
+    if session:
+        s_status = "🟢 AKTİF GÖRÜŞME" if session.is_active else f"🔴 KAPALI ({session.close_reason or 'Tamamlandı'})"
+        first_msg = "Evet ✅" if session.creator_first_message_sent else "Hayır ⏳"
+        session_info = (
+            f"🤝 <b>Köprü / Görüşme Oturumu:</b>\n"
+            f"• <b>Aday:</b> {applicant_name} ({applicant_uname} - ID: <code>{session.applicant_id}</code>)\n"
+            f"• <b>Sırası:</b> {session.candidate_rank}. Sıradaki Aday\n"
+            f"• <b>İlk Mesaj:</b> {first_msg}\n"
+            f"• <b>Oturum Durumu:</b> <code>{s_status}</code>\n"
+            f"• <b>Başlangıç:</b> {format_datetime_tr(session.started_at)}\n"
+        )
+    else:
+        session_info = "🤝 <b>Köprü Görüşmesi:</b> <i>(Henüz bir adayla eşleşme oturumu başlamadı.)</i>\n"
+
+    if logs:
+        msg_lines = []
+        for idx, l in enumerate(logs, 1):
+            sent_time = l.sent_at.strftime("%H:%M:%S")
+            role_icon = "👤" if "Sahip" in (l.sender_role or "") else ("🙋" if "Aday" in (l.sender_role or "") else "⚙️")
+
+            if l.content_type == "photo":
+                content_desc = f"📷 <i>[Fotoğraf]</i> {l.text_content or ''}"
+            elif l.content_type == "document":
+                content_desc = f"📄 <i>[{l.file_name or 'Doküman'}]</i> {l.text_content or ''}"
+            elif l.content_type == "voice":
+                content_desc = f"🎤 <i>[Sesli Mesaj]</i>"
+            else:
+                content_desc = l.text_content or ""
+
+            if len(content_desc) > 200:
+                content_desc = content_desc[:197] + "..."
+
+            prefix = "└" if idx == len(logs) else "├"
+            msg_lines.append(f"{prefix} 🕒 <code>{sent_time}</code> {role_icon} <b>{l.sender_role}:</b> {content_desc}")
+
+        formatted_logs = "\n".join(msg_lines)
+    else:
+        formatted_logs = "  <i>(Bu ilana ait arşivlenmiş mesaj kaydı bulunmamaktadır.)</i>"
+
+    dossier_text = (
+        f"📜 <b>İLAN #{listing.id} DENETİM VE MESAJ LOGLARI</b>\n"
+        f"<i>(Denetim logları 3 ay / 90 gün boyunca saklanır)</i>\n\n"
+        f"📋 <b>İlan Bilgileri:</b>\n"
+        f"• <b>Durum:</b> {status_text}\n"
+        f"• <b>Grup:</b> {listing.group_title or 'Grup'} (<code>{listing.group_id}</code>)\n"
+        f"• <b>İlan Sahibi:</b> {creator_name} ({creator_uname} - ID: <code>{listing.creator_id}</code>)\n"
+        f"• <b>Açılış Tarihi:</b> {format_datetime_tr(listing.created_at)}\n"
+        f"• <b>İlan Metni:</b> <i>{listing.raw_text[:200]}</i>\n\n"
+        f"{session_info}\n"
+        f"💬 <b>Görüşme Mesaj Geçmişi ({len(logs)} Kayıt):</b>\n"
+        f"{formatted_logs}\n\n"
+        f"ℹ️ <i>Mesaj logları KVKK ve denetim kuralları gereği 3 ay (90 gün) boyunca güvenli şekilde saklanmaktadır.</i>"
+    )
+
+    buttons = []
+    user_btns = []
+    user_btns.append(InlineKeyboardButton(text="👤 İlan Sahibi", callback_data=f"adm_act:whois:{listing.creator_id}"))
+    if session:
+        user_btns.append(InlineKeyboardButton(text="👤 Aday", callback_data=f"adm_act:whois:{session.applicant_id}"))
+    if user_btns:
+        buttons.append(user_btns)
+
+    action_row = []
+    if session and session.is_active:
+        action_row.append(InlineKeyboardButton(text="🛑 Görüşmeyi Durdur", callback_data=f"adm_act:stop_session:{listing.id}"))
+    action_row.append(InlineKeyboardButton(text="👥 Başvuru Kuyruğu", callback_data=f"adm_act:view_queue:{listing.id}"))
+    buttons.append(action_row)
+
+    buttons.append([InlineKeyboardButton(text="🧹 Tüm Kısıtları Kaldır", callback_data="adm_act:reset_all:0")])
+
+    return dossier_text, InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
 def build_user_admin_keyboard(user_id: int, is_banned: bool = False) -> InlineKeyboardMarkup:
     if is_banned:
         buttons = [
@@ -636,12 +784,58 @@ async def handle_admin_action_callback(callback: CallbackQuery, db: AsyncSession
         await callback.message.reply(text, reply_markup=get_admin_main_keyboard(), parse_mode="HTML")
         return
 
+    elif action == "stop_session":
+        listing_id = target_uid
+        s_stmt = select(BridgeSession).where(BridgeSession.listing_id == listing_id, BridgeSession.is_active == True)
+        res = await db.execute(s_stmt)
+        session = res.scalar_one_or_none()
+        if session:
+            session.is_active = False
+            session.closed_at = datetime.utcnow()
+            session.close_reason = "ADMIN_STOPPED"
+
+            l_stmt = select(Listing).where(Listing.id == listing_id)
+            l_res = await db.execute(l_stmt)
+            listing = l_res.scalar_one_or_none()
+            if listing:
+                listing.status = "CANCELLED_ADMIN"
+                listing.cancellation_reason = "Yönetici müdahalesiyle durduruldu"
+
+            await db.commit()
+            await RedisQueueService.remove_active_bridge(session.creator_id)
+            await RedisQueueService.remove_active_bridge(session.applicant_id)
+            await callback.answer(f"🛑 #{listing_id} görüşmesi durduruldu!", show_alert=True)
+        else:
+            await callback.answer("ℹ️ Aktif bir görüşme oturumu bulunamadı.", show_alert=True)
+
+        dossier, kb = await render_listing_logs_dossier(listing_id, db)
+        if dossier:
+            try:
+                await callback.message.edit_text(dossier, reply_markup=kb, parse_mode="HTML")
+            except Exception:
+                pass
+        return
+
+    elif action == "view_queue":
+        await callback.answer()
+        listing_id = target_uid
+        queue_text = await get_listing_queue_text(listing_id, db)
+        await callback.message.reply(queue_text, parse_mode="HTML")
+        return
+
     u_stmt = select(User).where(User.id == target_uid)
     res = await db.execute(u_stmt)
     user = res.scalar_one_or_none()
 
     if not user:
         await callback.answer("❌ Kullanıcı bulunamadı.", show_alert=True)
+        return
+
+    if action == "whois":
+        await callback.answer()
+        dossier = await render_user_profile_dossier(user, db)
+        kb = build_user_admin_keyboard(user.id, is_banned=user.is_banned)
+        await callback.message.reply(dossier, reply_markup=kb, parse_mode="HTML")
         return
 
     admin_name = callback.from_user.full_name or f"Admin {callback.from_user.id}"
@@ -776,6 +970,32 @@ async def find_user_by_query(query_str: str, db: AsyncSession) -> User:
     return user
 
 
+@router.message(Command("log", "ilan_log", "loglar", "kayitlar"))
+async def cmd_listing_logs(message: Message, db: AsyncSession):
+    if not is_admin_chat(message):
+        return
+
+    args = message.text.split()
+    listing_id = None
+    if len(args) >= 2 and args[1].lstrip("#").isdigit():
+        listing_id = int(args[1].lstrip("#"))
+    elif message.reply_to_message:
+        reply_txt = message.reply_to_message.text or message.reply_to_message.caption or ""
+        id_m = re.search(r"(?:İlan|ilan|Listing|#)\s*#?(\d+)", reply_txt)
+        if id_m:
+            listing_id = int(id_m.group(1))
+
+    if not listing_id:
+        await message.reply("⚠️ Kullanım: <code>#12 log</code> veya <code>/log 12</code>", parse_mode="HTML")
+        return
+
+    dossier, kb = await render_listing_logs_dossier(listing_id, db)
+    if dossier:
+        await message.reply(dossier, reply_markup=kb, parse_mode="HTML")
+    else:
+        await message.reply(f"❌ <b>#{listing_id}</b> numaralı ilana ait kayıt bulunamadı.", parse_mode="HTML")
+
+
 @router.message(F.chat.id == settings.admin_chat_id)
 async def handle_admin_natural_query(message: Message, db: AsyncSession):
     text = (message.text or message.caption or "").strip()
@@ -786,7 +1006,35 @@ async def handle_admin_natural_query(message: Message, db: AsyncSession):
     if text.startswith("/"):
         return
 
-    # 1. Regex ile "@username kimdir", "username kimdir", "kimdir @username", "kimdir 123456" yakala
+    # 1. "#x log", "log #x", "x log", "ilan #x log" veya reply olarak "log" yakala
+    log_match = re.search(r"#(\d+)\s+log(?:lar[ıi])?", text, re.IGNORECASE)
+    if not log_match:
+        log_match = re.search(r"\b(?:log|loglar[ıi]|kayıtlar[ıi])\s+#?(\d+)", text, re.IGNORECASE)
+    if not log_match:
+        log_match = re.search(r"\b(\d+)\s+log(?:lar[ıi])?", text, re.IGNORECASE)
+    if not log_match:
+        log_match = re.search(r"\bilan\s+#?(\d+)\s+log(?:lar[ıi])?", text, re.IGNORECASE)
+
+    if not log_match and re.search(r"^\s*#?log(?:lar[ıi])?\s*$", text, re.IGNORECASE) and message.reply_to_message:
+        reply_txt = message.reply_to_message.text or message.reply_to_message.caption or ""
+        id_m = re.search(r"(?:İlan|ilan|Listing|#)\s*#?(\d+)", reply_txt)
+        if id_m:
+            listing_id = int(id_m.group(1))
+            dossier, kb = await render_listing_logs_dossier(listing_id, db)
+            if dossier:
+                await message.reply(dossier, reply_markup=kb, parse_mode="HTML")
+                return
+
+    if log_match:
+        listing_id = int(log_match.group(1))
+        dossier, kb = await render_listing_logs_dossier(listing_id, db)
+        if dossier:
+            await message.reply(dossier, reply_markup=kb, parse_mode="HTML")
+        else:
+            await message.reply(f"❌ <b>#{listing_id}</b> numaralı ilana ait kayıt bulunamadı.", parse_mode="HTML")
+        return
+
+    # 2. Regex ile "@username kimdir", "username kimdir", "kimdir @username", "kimdir 123456" yakala
     match = re.search(r"@?([a-zA-Z0-9_]+)\s+kimdir\??", text, re.IGNORECASE)
     if not match:
         match = re.search(r"\bkimdir\s+@?([a-zA-Z0-9_]+)\??", text, re.IGNORECASE)
@@ -831,43 +1079,13 @@ async def cmd_listing_detail(message: Message, db: AsyncSession):
         return
 
     try:
-        listing_id = int(args[1])
+        listing_id = int(args[1].lstrip("#"))
     except ValueError:
         await message.reply("❌ Geçersiz İlan ID.")
         return
 
-    l_stmt = select(Listing).where(Listing.id == listing_id)
-    res = await db.execute(l_stmt)
-    listing = res.scalar_one_or_none()
-
-    if not listing:
-        await message.reply("❌ İlan bulunamadı.")
-        return
-
-    # Başvuruları çek
-    app_stmt = select(Application).where(Application.listing_id == listing_id).order_by(Application.queue_number)
-    app_res = await db.execute(app_stmt)
-    apps = app_res.scalars().all()
-
-    # Mesaj log sayısını çek
-    log_stmt = select(func.count(MessageLog.id)).where(MessageLog.listing_id == listing_id)
-    log_count = (await db.execute(log_stmt)).scalar() or 0
-
-    lines = [
-        f"📋 <b>İLAN DETAYI (#{listing.id})</b>",
-        f"• <b>Durum:</b> <code>{listing.status}</code>",
-        f"• <b>Grup:</b> {listing.group_title} (<code>{listing.group_id}</code>)",
-        f"• <b>İlan Sahibi ID:</b> <code>{listing.creator_id}</code>",
-        f"• <b>Açılış Tarihi:</b> {format_datetime_tr(listing.created_at)}",
-        f"• <b>Denetim Log Sayısı:</b> {log_count} Mesaj/Dosya\n",
-        f"👥 <b>Başvuru Kuyruğu ({len(apps)} Kişi):</b>"
-    ]
-
-    for a in apps:
-        lines.append(f"  {a.queue_number}. User ID: <code>{a.user_id}</code> | Durum: <code>{a.status}</code> (⭐ {a.user_rank_score} Puan)")
-
-    lines.append(f"\n📝 <b>İlan Metni:</b>\n<i>{listing.raw_text[:300]}</i>")
-    await message.reply("\n".join(lines), parse_mode="HTML")
+    queue_text = await get_listing_queue_text(listing_id, db)
+    await message.reply(queue_text, parse_mode="HTML")
 
 
 @router.message(Command("aktif_ilanlar"))

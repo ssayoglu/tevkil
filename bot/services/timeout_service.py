@@ -182,12 +182,20 @@ class TimeoutService:
         """
         Arka planda her 60 saniyede bir çalışarak veritabanındaki süresi dolmuş
         aktif oturumları kontrol eder ve iptal eder (bot restart koruması).
+        Ayrıca günde 1 kez 90 günden eski mesaj loglarını temizler.
         """
+        last_cleanup = datetime.utcnow()
         while True:
             try:
                 await asyncio.sleep(interval_seconds)
+                now = datetime.utcnow()
+
+                # Günde 1 kez 90 günden (3 ay) eski denetim loglarını temizle
+                if (now - last_cleanup).total_seconds() >= 86400:
+                    await AuditService.cleanup_old_logs(days=90)
+                    last_cleanup = now
+
                 async with AsyncSessionLocal() as db:
-                    now = datetime.utcnow()
                     stmt = (
                         select(BridgeSession)
                         .join(Listing, BridgeSession.listing_id == Listing.id)

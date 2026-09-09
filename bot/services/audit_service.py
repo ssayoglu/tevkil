@@ -109,3 +109,26 @@ class AuditService:
             )
         except Exception as e:
             print(f"[AuditService] Admin event bildirim hatası: {e}")
+
+    @staticmethod
+    async def cleanup_old_logs(days: int = 90) -> int:
+        """
+        3 aydan (varsayılan 90 gün) eski denetim mesaj loglarını temizler.
+        Dönüş: Silinen log sayısı
+        """
+        from datetime import timedelta
+        from sqlalchemy import delete
+
+        cutoff = datetime.utcnow() - timedelta(days=days)
+        try:
+            async with AsyncSessionLocal() as db:
+                stmt = delete(MessageLog).where(MessageLog.sent_at < cutoff)
+                result = await db.execute(stmt)
+                await db.commit()
+                deleted_count = result.rowcount or 0
+                if deleted_count > 0:
+                    print(f"[AuditService] {deleted_count} adet {days} günden eski denetim logu temizlendi.")
+                return deleted_count
+        except Exception as e:
+            print(f"[AuditService] Log temizleme hatası: {e}")
+            return 0
