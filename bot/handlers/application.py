@@ -91,7 +91,7 @@ async def update_group_listing_board(bot, listing: Listing, db: AsyncSession = N
         footer = "🛑 <b>İLAN YÖNETİCİ TARAFINDAN DURDURULDU</b>"
     else:
         footer = (
-            "🚨 <b>ÖNEMLİ KURAL:</b> İlan sahibine özelden yazmak veya tarife altı teklif vermek <b>DİREKT BAN</b> sebebidir!\n\n"
+            "🚨 <b>ÖNEMLİ KURAL:</b> İlan sahibine özelden yazmak veya tarife altı teklif vermek <b>DİREKT SİSTEMDEN UZAKLAŞTIRMA</b> sebebidir!\n\n"
             "👇 <i>Yedek sıraya girmek için aşağıdaki butonu kullanabilirsiniz:</i>"
         )
 

@@ -109,15 +109,15 @@ async def cmd_stop_session(message: Message, db: AsyncSession):
     await message.reply(f"✅ #{listing_id} numaralı ilanın görüşmesi başarıyla durduruldu ve taraflara bildirildi.")
 
 
-@router.message(Command("tarife_ban"))
+@router.message(Command("tarife_uzaklastir", "tarife_ban"))
 async def cmd_tariff_ban(message: Message, db: AsyncSession):
-    """Tarife altı teklif veren kullanıcıya doğrudan ağır ban uygular."""
+    """Tarife altı teklif veren kullanıcıya doğrudan ağır uzaklaştırma uygular."""
     if not is_admin_chat(message):
         return
 
     parts = message.text.split(maxsplit=3)
     if len(parts) < 2:
-        await message.reply("⚠️ Kullanım: <code>/tarife_ban &lt;user_id&gt; [gün] [sebep]</code>", parse_mode="HTML")
+        await message.reply("⚠️ Kullanım: <code>/tarife_uzaklastir &lt;user_id&gt; [gün] [sebep]</code>", parse_mode="HTML")
         return
 
     try:
@@ -161,9 +161,9 @@ async def cmd_tariff_ban(message: Message, db: AsyncSession):
         await message.bot.send_message(
             chat_id=user_id,
             text=(
-                f"🚨 <b>DİREKT SİSTEMDEN MEN EDİLDİNİZ (TARİFE ALTI TEKLİF)</b>\n\n"
+                f"🚨 <b>DİREKT SİSTEMDEN UZAKLAŞTIRILDINIZ (TARİFE ALTI TEKLİF)</b>\n\n"
                 f"Baro Asgari Ücret Tarifesi / Grup Tarifesi altında teklifte bulunduğunuz gerekçesiyle "
-                f"hesabınız yöneticiler tarafından <b>{days} gün</b> süreyle kısıtlanmış ve <b>+30 Ceza Puanı</b> uygulanmıştır.\n\n"
+                f"hesabınız yöneticiler tarafından <b>{days} gün</b> süreyle sistemden uzaklaştırılmış ve <b>+30 Ceza Puanı</b> uygulanmıştır.\n\n"
                 f"<b>Gerekçe:</b> {reason}\n"
                 f"<b>Kısıtlama Bitiş:</b> {format_date_short_tr(ban_until)}"
             ),
@@ -174,20 +174,20 @@ async def cmd_tariff_ban(message: Message, db: AsyncSession):
 
     await message.reply(
         f"🚨 <code>{user_id}</code> kullanıcısına <b>Tarife Altı Teklif İhlali</b> sebebiyle "
-        f"<b>{days} gün DİREKT BAN</b> ve <b>+30 Ceza Puanı</b> uygulandı.\n"
+        f"<b>{days} gün DİREKT UZAKLAŞTIRMA</b> ve <b>+30 Ceza Puanı</b> uygulandı.\n"
         f"Bitiş Tarihi: {format_date_short_tr(ban_until)}",
         parse_mode="HTML"
     )
 
 
-@router.message(Command("kullanici_kisitla"))
+@router.message(Command("kullanici_uzaklastir", "kullanici_kisitla"))
 async def cmd_ban_user(message: Message, db: AsyncSession):
     if not is_admin_chat(message):
         return
 
     parts = message.text.split(maxsplit=3)
     if len(parts) < 2:
-        await message.reply("⚠️ Kullanım: <code>/kullanici_kisitla &lt;user_id&gt; [gün] [sebep]</code>", parse_mode="HTML")
+        await message.reply("⚠️ Kullanım: <code>/kullanici_uzaklastir &lt;user_id&gt; [gün] [sebep]</code>", parse_mode="HTML")
         return
 
     try:
@@ -197,7 +197,7 @@ async def cmd_ban_user(message: Message, db: AsyncSession):
         return
 
     days = int(parts[2]) if len(parts) >= 3 and parts[2].isdigit() else settings.ban_duration_days
-    reason = parts[3] if len(parts) >= 4 else "Yönetici kararı ile kısıtlandı"
+    reason = parts[3] if len(parts) >= 4 else "Yönetici kararı ile uzaklaştırıldı"
 
     ban_until = datetime.utcnow() + timedelta(days=days)
 
@@ -223,7 +223,7 @@ async def cmd_ban_user(message: Message, db: AsyncSession):
             chat_id=user_id,
             text=(
                 f"⛔ <b>Sistemden Uzaklaştırıldınız</b>\n\n"
-                f"Hesabınız yöneticiler tarafından <b>{days} gün</b> süreyle kısıtlanmıştır.\n"
+                f"Hesabınız yöneticiler tarafından <b>{days} gün</b> süreyle sistemden uzaklaştırılmıştır.\n"
                 f"<b>Sebep:</b> {reason}"
             ),
             parse_mode="HTML"
@@ -232,13 +232,13 @@ async def cmd_ban_user(message: Message, db: AsyncSession):
         pass
 
     await message.reply(
-        f"🔒 <code>{user_id}</code> ID'li kullanıcı <b>{days} gün</b> boyunca kısıtlandı.\n"
+        f"🔒 <code>{user_id}</code> ID'li kullanıcı <b>{days} gün</b> boyunca sistemden uzaklaştırıldı.\n"
         f"Bitiş Tarihi: {format_date_short_tr(ban_until)}",
         parse_mode="HTML"
     )
 
 
-@router.message(Command("ceza_kaldir"))
+@router.message(Command("uzaklastirma_kaldir", "ceza_kaldir"))
 async def cmd_unban_user(message: Message, db: AsyncSession):
     if not is_admin_chat(message):
         return

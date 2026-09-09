@@ -21,7 +21,7 @@ def get_reason_keyboard(listing_id: int, role_prefix: str) -> InlineKeyboardMark
     """
     kb = [
         [
-            InlineKeyboardButton(text="🚨 Tarife Altı Teklif (Direkt Ban)", callback_data=f"reason:{role_prefix}:{listing_id}:tarife_alti")
+            InlineKeyboardButton(text="🚨 Tarife Altı Teklif (Direkt Uzaklaştırma)", callback_data=f"reason:{role_prefix}:{listing_id}:tarife_alti")
         ],
         [
             InlineKeyboardButton(text="💰 Normal Ücret", callback_data=f"reason:{role_prefix}:{listing_id}:ucret"),
@@ -252,14 +252,14 @@ async def handle_reason_selected(callback: CallbackQuery, db: AsyncSession):
         ban_days = settings.tariff_ban_duration_days
         ban_until = now + timedelta(days=ban_days)
         
-        # Kişiyi banla ve 30 ceza puanı ekle
+        # Kişiyi sistemden uzaklaştır ve 30 ceza puanı ekle
         u_stmt = select(User).where(User.id == violator_id)
         u_res = await db.execute(u_stmt)
         violator = u_res.scalar_one_or_none()
         if violator:
             violator.is_banned = True
             violator.banned_until = ban_until
-            violator.ban_reason = f"Tarife altı ücret teklifi / kural ihlali ({ban_days} gün ban)"
+            violator.ban_reason = f"Tarife altı ücret teklifi / kural ihlali ({ban_days} gün uzaklaştırma)"
             violator.penalty_points += 30
 
             penalty_log = PenaltyLog(
@@ -272,7 +272,7 @@ async def handle_reason_selected(callback: CallbackQuery, db: AsyncSession):
 
         await db.commit()
 
-        # Banlanan tarafa sert bildirim gönder
+        # Uzaklaştırılan tarafa bildirim gönder
         try:
             await callback.bot.send_message(
                 chat_id=violator_id,
@@ -281,7 +281,7 @@ async def handle_reason_selected(callback: CallbackQuery, db: AsyncSession):
                     f"#{listing_id} numaralı tevkil görüşmesinde <b>Baro Asgari Ücret Tarifesi / Grup Tarifesi Altında</b> "
                     f"teklifte bulunulduğu tespit edilmiş/raporlanmıştır.\n\n"
                     f"📌 <b>Uygulanan Yaptırımlar:</b>\n"
-                    f"• Hesabınız <b>{ban_days} gün</b> boyunca sistemden yasaklanmıştır.\n"
+                    f"• Hesabınız <b>{ban_days} gün</b> boyunca sistemden uzaklaştırılmıştır.\n"
                     f"• Hesabınıza <b>+30 Ceza Puanı</b> eklenmiştir.\n"
                     f"• Kısıtlama Bitiş Tarihi: {format_date_short_tr(ban_until)}\n\n"
                     f"<i>Meslek onuruna ve baro asgari ücret tarifelerine uyulması zorunludur.</i>"
@@ -289,23 +289,23 @@ async def handle_reason_selected(callback: CallbackQuery, db: AsyncSession):
                 parse_mode="HTML"
             )
         except Exception as e:
-            print(f"[Confirmation] Tarife ban bildirimi iletilemedi: {e}")
+            print(f"[Confirmation] Tarife uzaklaştırma bildirimi iletilemedi: {e}")
 
         # Bildiren tarafa onay
         await callback.message.edit_text(
             f"🚨 <b>Tarife İhlali Kaydedildi ve Yaptırım Uygulandı</b>\n\n"
-            f"Tarife altı teklif bildirimi nedeniyle karşı taraf <b>{ban_days} gün süreyle doğrudan banlanmış</b> "
+            f"Tarife altı teklif bildirimi nedeniyle karşı taraf <b>{ban_days} gün süreyle doğrudan sistemden uzaklaştırılmış</b> "
             f"ve durum Admin Denetim Grubu'na yüksek öncelikle iletilmiştir.",
             parse_mode="HTML"
         )
 
         # Admin Denetim Grubuna Yüksek Öncelikli Alarm
         admin_alert = (
-            f"🚨🚨 <b>[TARİFE ALTI ÜCRET İHLALİ — DİREKT BAN UYGULANDI]</b>\n"
+            f"🚨🚨 <b>[TARİFE ALTI ÜCRET İHLALİ — DİREKT UZAKLAŞTIRMA UYGULANDI]</b>\n"
             f"📋 <b>İlan ID:</b> #{listing_id}\n"
             f"👤 <b>Şikayet Eden ({reporter_title}):</b> <code>{reporter_id}</code>\n"
-            f"👤 <b>Yasaklanan ({violator_title}):</b> <code>{violator_id}</code>\n"
-            f"⚖️ <b>Uygulanan Ceza:</b> {ban_days} Gün Direkt Ban & +30 Ceza Puanı\n"
+            f"👤 <b>Uzaklaştırılan ({violator_title}):</b> <code>{violator_id}</code>\n"
+            f"⚖️ <b>Uygulanan Ceza:</b> {ban_days} Gün Direkt Uzaklaştırma & +30 Ceza Puanı\n"
             f"⏰ <b>Bitiş Tarihi:</b> {format_date_short_tr(ban_until)}\n\n"
             f"<i>Yöneticilerimiz sohbet arşivini yukarıdaki loglardan denetleyebilir.</i>"
         )

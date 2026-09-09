@@ -172,7 +172,7 @@ async def detect_tevkil_post(message: Message, db: AsyncSession):
         f"<i>{text}</i>\n\n"
         f"📋 <b>Canlı Başvuru Sıralaması:</b>\n"
         f"<i>(Henüz başvuru yapılmadı. İlk tıklayan görüşme hakkı kazanır.)</i>\n\n"
-        f"🚨 <b>ÖNEMLİ:</b> İlan sahibine özelden yazmak ve tarife altı teklif vermek <b>DİREKT BAN</b> sebebidir!\n"
+        f"🚨 <b>ÖNEMLİ:</b> İlan sahibine özelden yazmak ve tarife altı teklif vermek <b>DİREKT SİSTEMDEN UZAKLAŞTIRMA</b> sebebidir!\n"
         f"ℹ️ <i>Başvuran meslektaşlarımızın DM bildirimleri alabilmesi için @Tevkil_Denetim_Merkezi_bot botunu başlatması gerekmektedir.</i>\n\n"
         f"👇 <i>Aşağıdaki butona tıklayarak adil sıraya girebilirsiniz:</i>"
     )
