@@ -39,3 +39,36 @@ def test_tevkil_detection_negative_general():
     assert not is_tevkil_message(None)
     assert not is_tevkil_message("Bursa'da hava çok güzel.")  # Adliye var ama görev/tevkil bağlamı yok
     assert not is_tevkil_message("tevkildirr")
+
+
+@pytest.mark.asyncio
+async def test_send_welcome_and_onboarding():
+    from unittest.mock import AsyncMock, MagicMock
+    from aiogram.types import User as TelegramUser
+    from bot.handlers.group_detector import send_welcome_and_onboarding
+
+    mock_bot = AsyncMock()
+    mock_bot.get_me.return_value = MagicMock(username="Tevkil_Denetim_Merkezi_bot")
+    mock_db = AsyncMock()
+
+    res = MagicMock()
+    res.scalar_one_or_none.return_value = None
+    mock_db.execute.return_value = res
+
+    new_user = TelegramUser(id=9988, is_bot=False, first_name="Mehmet", username="mehmetav")
+
+    await send_welcome_and_onboarding(
+        bot=mock_bot,
+        chat_id=-10019999,
+        new_user=new_user,
+        db=mock_db
+    )
+
+    # Verifications
+    assert mock_db.add.called
+    assert mock_bot.send_message.called
+    # Check that welcome message with deep link was sent to group
+    sent_args = mock_bot.send_message.call_args_list[-1]
+    assert sent_args[1]["chat_id"] == -10019999
+    assert "start=baro_verify" in str(sent_args[1]["reply_markup"])
+

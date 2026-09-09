@@ -1,9 +1,11 @@
 import re
 from datetime import datetime
 from aiogram import Router, F
-from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, ChatMemberUpdated
+from aiogram.filters.chat_member_updated import ChatMemberUpdatedFilter, JOIN_TRANSITION
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from bot.config import settings
 from bot.database.models import User, Listing
 from bot.services.audit_service import AuditService
 from bot.services.rank_service import RankService
@@ -235,3 +237,114 @@ async def detect_tevkil_post(message: Message, db: AsyncSession):
             f"📝 <b>İlan Metni:</b>\n{text[:500]}"
         )
     )
+
+
+async def send_welcome_and_onboarding(bot, chat_id: int, new_user, db: AsyncSession):
+    """
+    Gruba yeni katılan kullanıcıyı DB'ye kaydeder, özel DM göndermeyi dener ve
+    grupta botu başlatıp baro kaydını doğrulatacak yönlendirme butonunu yayınlar.
+    """
+    if not new_user or new_user.is_bot:
+        return
+
+    # 1. Kullanıcıyı DB'ye kaydet veya güncelle
+    u_stmt = select(User).where(User.id == new_user.id)
+    res = await db.execute(u_stmt)
+    db_user = res.scalar_one_or_none()
+    if not db_user:
+        db_user = User(
+            id=new_user.id,
+            username=new_user.username,
+            full_name=new_user.full_name or "",
+            rank_score=100,
+            penalty_points=0
+        )
+        db.add(db_user)
+        await db.commit()
+
+    bot_info = await bot.get_me()
+    bot_username = bot_info.username or "Tevkil_Denetim_Merkezi_bot"
+    deep_link = f"https://t.me/{bot_username}?start=baro_verify"
+
+    user_mention = f"@{new_user.username}" if new_user.username else f"<a href='tg://user?id={new_user.id}'>{new_user.full_name or 'Meslektaşımız'}</a>"
+
+    # 2. Doğrudan DM göndermeyi dene (Kullanıcı botu daha önce açmışsa doğrudan DM düşer)
+    try:
+        dm_kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🎖️ Baro Kaydımı Doğrula (+10 Puan)", url=deep_link)],
+            [InlineKeyboardButton(text="📚 Kullanım Rehberi", callback_data="user_act:guide")]
+        ])
+        await bot.send_message(
+            chat_id=new_user.id,
+            text=(
+                f"👋 <b>Merhaba Sayın {new_user.full_name or 'Meslektaşımız'}, Tevkil Grubumuza Hoş Geldiniz!</b>\n\n"
+                f"⚖️ Grubumuzda paylaşılan tevkil ilanlarına milisaniye hızında sıraya girip başvurabilir, "
+                f"meslektaşlarımızla güvenli ve anonim olarak iletişim kurabilirsiniz.\n\n"
+                f"🎖️ <b>Baro Levha Kaydınızı Doğrulayın:</b>\n"
+                f"Profilinize <b>'Baro Onaylı Avukat'</b> rozeti tanımlanması ve <b>+10 Güven Puanı</b> kazanmak için "
+                f"lütfen aşağıdaki butona tıklayarak kaydınızı doğrulayınız:"
+            ),
+            reply_markup=dm_kb,
+            parse_mode="HTML"
+        )
+    except Exception:
+        pass
+
+    # 3. Grupta kullanıcıyı etiketleyerek yönlendirici hoş geldin mesajı gönder
+    group_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(
+                text="🤖 Tevkil Botunu Başlat & Baro Doğrula 🎖️",
+                url=deep_link
+            )
+        ]
+    ])
+
+    group_welcome_text = (
+        f"👋 <b>Hoş Geldiniz Sayın {user_mention}!</b>\n\n"
+        f"⚖️ <b>Hukuk Tevkil Grubumuza katıldığınız için teşekkür ederiz.</b>\n\n"
+        f"📌 <b>Önemli Bilgilendirme:</b>\n"
+        f"• Gruptaki tevkil ilanlarına <b>milisaniye hızında sıraya girip başvurabilmek</b>,\n"
+        f"• İlan açıldığında DM'den anlık bildirim alabilmek,\n"
+        f"• Profilinize <b>🎖️ 'Baro Onaylı Avukat' (+10 Puan)</b> rozetini tanımlatmak için,\n\n"
+        f"👇 <i>Lütfen aşağıdaki butona tıklayarak botu 1 kez <b>[BAŞLATINIZ]</b>:</i>"
+    )
+
+    try:
+        await bot.send_message(
+            chat_id=chat_id,
+            text=group_welcome_text,
+            reply_markup=group_kb,
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        print(f"[GroupDetector] Grupta hoş geldin mesajı gönderilemedi: {e}")
+
+
+@router.chat_member(ChatMemberUpdatedFilter(JOIN_TRANSITION))
+async def handle_new_chat_member_event(event: ChatMemberUpdated, db: AsyncSession):
+    if event.chat.type not in ["group", "supergroup"]:
+        return
+    # Admin grubuna girenleri filtrele
+    if event.chat.id == settings.admin_chat_id:
+        return
+    await send_welcome_and_onboarding(
+        bot=event.bot,
+        chat_id=event.chat.id,
+        new_user=event.new_chat_member.user,
+        db=db
+    )
+
+
+@router.message(F.chat.type.in_({"group", "supergroup"}), F.new_chat_members)
+async def handle_new_chat_members_message(message: Message, db: AsyncSession):
+    if message.chat.id == settings.admin_chat_id:
+        return
+    for member in message.new_chat_members:
+        await send_welcome_and_onboarding(
+            bot=message.bot,
+            chat_id=message.chat.id,
+            new_user=member,
+            db=db
+        )
+

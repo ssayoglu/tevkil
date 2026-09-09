@@ -1,7 +1,9 @@
 from datetime import datetime
 from aiogram import Router, F
-from aiogram.types import Message
+from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from aiogram.filters import CommandStart, Command
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from bot.database.models import User, Listing, Application
@@ -14,8 +16,14 @@ from bot.utils.time_utils import format_datetime_tr, format_date_short_tr
 router = Router()
 
 
+class BaroVerifyStates(StatesGroup):
+    waiting_for_baro = State()
+    waiting_for_sicil = State()
+    waiting_for_document = State()
+
+
 @router.message(CommandStart(), F.chat.type == "private")
-async def cmd_start(message: Message, db: AsyncSession):
+async def cmd_start(message: Message, state: FSMContext, db: AsyncSession):
     sender = message.from_user
     u_stmt = select(User).where(User.id == sender.id)
     res = await db.execute(u_stmt)
@@ -41,11 +49,36 @@ async def cmd_start(message: Message, db: AsyncSession):
     from bot.services.bridge_service import BridgeService
     await BridgeService.flush_pending_messages(message.bot, sender.id)
 
-    # Parametre kontrolü (örn. /start chat_6)
+    # Parametre kontrolü (örn. /start chat_6 veya /start baro_verify)
     start_arg = None
     parts = (message.text or "").split()
     if len(parts) > 1:
         start_arg = parts[1].strip()
+
+    if start_arg in ["baro_verify", "baro", "avukatlik_dogrula"]:
+        if user.is_baro_verified:
+            await message.reply(
+                f"🎖️ <b>Sayın Av. {user.full_name}, Baro Kaydınız Zaten Doğrulanmıştır!</b>\n\n"
+                f"• <b>Kayıtlı Baro:</b> {user.baro_name} Barosu\n"
+                f"• <b>Sicil No:</b> {user.baro_sicil_no}\n"
+                f"• <b>Net Rank Puanı:</b> ⭐ {net_score}\n\n"
+                f"Grup içerisindeki tevkil ilanlarına <code>[📋 Başvur]</code> butonuna basarak doğrudan katılabilirsiniz.",
+                parse_mode="HTML"
+            )
+            return
+
+        await state.set_state(BaroVerifyStates.waiting_for_baro)
+        kb = BaroVerificationService.get_baro_selection_keyboard()
+        await message.reply(
+            f"👋 <b>Merhaba Sayın {sender.full_name}, Hoş Geldiniz!</b>\n\n"
+            f"🏛️ <b>AVUKATLIK / BARO LEVHA DOĞRULAMA ADIMI</b>\n\n"
+            f"Tevkil ilanlarına öncelikli katılabilmek, bildirimleri anında alabilmek ve "
+            f"<b>+10 Güven Puanı</b> ile <b>🎖️ 'Baro Onaylı Avukat'</b> rozetinizi almak için "
+            f"lütfen bağlı olduğunuz baroyu seçiniz:",
+            reply_markup=kb,
+            parse_mode="HTML"
+        )
+        return
 
     if start_arg and start_arg.startswith("chat_"):
         try:

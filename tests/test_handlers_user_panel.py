@@ -14,8 +14,8 @@ async def test_cmd_start(mocker):
     message.text = "/start"
     message.reply = AsyncMock()
 
-    # Mock DB session
     db = AsyncMock()
+    mock_state = AsyncMock()
     mock_res = MagicMock()
     mock_res.scalar_one_or_none.return_value = User(
         id=123456,
@@ -28,7 +28,7 @@ async def test_cmd_start(mocker):
     mocker.patch("bot.handlers.user_panel.RedisQueueService.get_active_bridge", return_value=None)
     mocker.patch("bot.services.bridge_service.BridgeService.flush_pending_messages", new_callable=AsyncMock)
 
-    await cmd_start(message, db)
+    await cmd_start(message, mock_state, db)
     assert message.reply.called
     reply_text = message.reply.call_args[0][0]
     assert "Ahmet Yılmaz" in reply_text
