@@ -96,17 +96,22 @@ def is_tevkil_message(text: str) -> bool:
     return False
 
 
-def build_apply_keyboard(listing_id: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="📋 Başvur (Sıraya Gir)",
-                    callback_data=f"apply:{listing_id}"
-                )
-            ]
-        ]
-    )
+def build_apply_keyboard(listing_id: int, has_active_session: bool = False) -> InlineKeyboardMarkup:
+    buttons = []
+    if has_active_session:
+        buttons.append([
+            InlineKeyboardButton(
+                text="💬 Görüşmeye Git (Özel Mesaj)",
+                url=f"https://t.me/Tevkil_Denetim_Merkezi_bot?start=chat_{listing_id}"
+            )
+        ])
+    buttons.append([
+        InlineKeyboardButton(
+            text="📋 Başvur (Sıraya Gir)",
+            callback_data=f"apply:{listing_id}"
+        )
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 @router.message(F.chat.type.in_({"group", "supergroup"}))

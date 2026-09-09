@@ -106,9 +106,13 @@ async def update_group_listing_board(bot, listing: Listing, db: AsyncSession = N
         f"{footer}"
     )
 
+    has_active = any(app_status == "ACTIVE" for app_status in status_map.values())
+    if listing.status == "MATCHED":
+        has_active = True
+
     try:
         if listing.bot_reply_message_id:
-            reply_markup = build_apply_keyboard(listing.id) if listing.status in ["OPEN", "MATCHED"] else None
+            reply_markup = build_apply_keyboard(listing.id, has_active_session=has_active) if listing.status in ["OPEN", "MATCHED"] else None
             await bot.edit_message_text(
                 chat_id=listing.group_id,
                 message_id=listing.bot_reply_message_id,
