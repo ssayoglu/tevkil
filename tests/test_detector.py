@@ -72,3 +72,27 @@ async def test_send_welcome_and_onboarding():
     assert sent_args[1]["chat_id"] == -10019999
     assert "start=baro_verify" in str(sent_args[1]["reply_markup"])
 
+
+def test_parse_baro_and_sicil():
+    from bot.middlewares.baro_check import parse_baro_and_sicil
+
+    b1, s1 = parse_baro_and_sicil("mersin barosu 545")
+    assert b1 == "Mersin"
+    assert s1 == "545"
+
+    b2, s2 = parse_baro_and_sicil("mersin 545")
+    assert b2 == "Mersin"
+    assert s2 == "545"
+
+    b3, s3 = parse_baro_and_sicil("istanbul barosu 34123")
+    assert b3 == "İstanbul"
+    assert s3 == "34123"
+
+    b4, s4 = parse_baro_and_sicil("545", default_baro="Mersin")
+    assert b4 == "Mersin"
+    assert s4 == "545"
+
+    b5, s5 = parse_baro_and_sicil("sadece rastgele bir metin")
+    assert b5 is None
+    assert s5 is None
+

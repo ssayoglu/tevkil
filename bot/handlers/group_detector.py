@@ -1,7 +1,7 @@
 import re
 from datetime import datetime
 from aiogram import Router, F
-from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, ChatMemberUpdated
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, ChatMemberUpdated
 from aiogram.filters.chat_member_updated import ChatMemberUpdatedFilter, JOIN_TRANSITION
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -357,4 +357,44 @@ async def handle_new_chat_members_message(message: Message, db: AsyncSession):
             new_user=member,
             db=db
         )
+
+
+@router.callback_query(F.data.startswith("grp_baro:"))
+async def handle_group_baro_selection_callback(callback: CallbackQuery):
+    parts = callback.data.split(":", 2)
+    if len(parts) < 3:
+        await callback.answer()
+        return
+
+    target_uid = int(parts[1]) if parts[1].isdigit() else 0
+    baro_name = parts[2]
+
+    # Başka bir kullanıcı tıklarsa uyar
+    if callback.from_user.id != target_uid:
+        await callback.answer("⚠️ Bu doğrulama butonu ilgili meslektaşımız içindir.", show_alert=True)
+        return
+
+    # Seçilen baroyu Redis'e 10 dakika sakla
+    from bot.services.redis_queue import redis_client
+    await redis_client.set(f"grp_baro_sel:{target_uid}", baro_name, ex=600)
+
+    user_mention = f"@{callback.from_user.username}" if callback.from_user.username else f"<a href='tg://user?id={callback.from_user.id}'>{callback.from_user.full_name or 'Meslektaşımız'}</a>"
+
+    await callback.answer(f"🏛️ {baro_name} Barosu seçildi!")
+
+    edit_text = (
+        f"🏛️ <b>Seçilen Baro:</b> {baro_name} Barosu\n\n"
+        f"Sayın {user_mention},\n"
+        f"Lütfen şimdi doğrudan grupta <b>Baro Sicil Numaranızı</b> yazınız (Örn: <code>545</code> veya <code>12345</code>):\n\n"
+        f"<i>(Mesajınız algılanıp otomatik onay kuyruğuna alınacaktır.)</i>"
+    )
+
+    try:
+        await callback.message.edit_text(edit_text, parse_mode="HTML")
+    except Exception:
+        try:
+            await callback.message.reply(edit_text, parse_mode="HTML")
+        except Exception:
+            pass
+
 
