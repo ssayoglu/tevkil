@@ -16,8 +16,8 @@ router = Router()
 
 
 def is_admin_chat(message: Message) -> bool:
-    """Mesajın tanımlı Admin Denetim Grubu'ndan gelip gelmediğini kontrol eder."""
-    return message.chat.id == settings.admin_chat_id
+    """Mesajın tanımlı Admin Denetim Grubu'ndan veya özel DM sohbetinden gelip gelmediğini kontrol eder."""
+    return message.chat.id == settings.admin_chat_id or message.chat.type == "private"
 
 
 def get_admin_main_keyboard() -> InlineKeyboardMarkup:
@@ -921,8 +921,8 @@ def build_user_admin_keyboard(user_id: int, is_banned: bool = False, is_baro_ver
 
 @router.callback_query(F.data.startswith("adm_act:"))
 async def handle_admin_action_callback(callback: CallbackQuery, db: AsyncSession):
-    if callback.message.chat.id != settings.admin_chat_id:
-        await callback.answer("⚠️ Bu butonlar sadece Admin Grubunda geçerlidir.", show_alert=True)
+    if callback.message.chat.id != settings.admin_chat_id and callback.message.chat.type != "private":
+        await callback.answer("⚠️ Bu butonlar sadece Admin Grubunda veya özel sohbette geçerlidir.", show_alert=True)
         return
 
     parts = callback.data.split(":")
@@ -1272,7 +1272,7 @@ async def cmd_listing_logs(message: Message, db: AsyncSession):
         await message.reply(f"❌ <b>#{listing_id}</b> numaralı ilana ait kayıt bulunamadı.", parse_mode="HTML")
 
 
-@router.message(F.chat.id == settings.admin_chat_id)
+@router.message((F.chat.id == settings.admin_chat_id) | (F.chat.type == "private"))
 async def handle_admin_natural_query(message: Message, db: AsyncSession):
     text = (message.text or message.caption or "").strip()
     if not text:
@@ -1284,8 +1284,8 @@ async def handle_admin_natural_query(message: Message, db: AsyncSession):
         await message.reply(guide, reply_markup=get_admin_main_keyboard(), parse_mode="HTML")
         return
 
-    # 0.1 Doğal Sıfırlama Sorguları (Örn: "baro sıfırla", "katılanları sıfırla", "üyeleri sıfırla", "doğrulamaları sıfırla")
-    if re.search(r"^(?:baro|kat[ıi]lanlar[ıi]|üyeler[ıi]|do[gğ]rulamalar[ıi])\s+s[ıi]f[ıi]rla\b", text, re.IGNORECASE) or re.search(r"^s[ıi]f[ıi]rla\s+(?:baro|kat[ıi]lanlar[ıi]|üyeler[ıi]|do[gğ]rulamalar[ıi])\b", text, re.IGNORECASE):
+    # 0.1 Doğal Sıfırlama Sorguları (Örn: "baro sıfırla", "/baro sıfırla", "katılanları sıfırla", "üyeleri sıfırla", "doğrulamaları sıfırla")
+    if re.search(r"^(?:/?baro|kat[ıi]lanlar[ıi]|üyeler[ıi]|do[gğ]rulamalar[ıi])\s+s[ıi]f[ıi]rla\b", text, re.IGNORECASE) or re.search(r"^s[ıi]f[ıi]rla\s+(?:baro|kat[ıi]lanlar[ıi]|üyeler[ıi]|do[gğ]rulamalar[ıi])\b", text, re.IGNORECASE):
         count = await reset_baro_verifications(db)
         summary = (
             f"🔄 <b>TEST MODU: TÜM KATILANLAR VE BARO DOĞRULAMALARI SIFIRLANDI</b>\n\n"

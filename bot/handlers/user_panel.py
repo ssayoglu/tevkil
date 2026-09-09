@@ -335,7 +335,7 @@ async def handle_callback_baro_verify(callback: CallbackQuery, state: FSMContext
     )
 
 
-@router.message(Command("baro_dogrula", "baro_kaydet", "baro", "avukatlik_dogrula"), F.chat.type == "private")
+@router.message(Command("baro_dogrula", "baro_kaydet", "avukatlik_dogrula", "avukat_dogrula"), F.chat.type == "private")
 async def cmd_baro_verify(message: Message, state: FSMContext, db: AsyncSession):
     parts = message.text.split(maxsplit=2)
     if len(parts) >= 3:
