@@ -115,6 +115,9 @@ class BridgeSession(Base):
     first_message_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     timeout_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     
+    creator_agreed: Mapped[bool] = mapped_column(Boolean, default=False)
+    applicant_agreed: Mapped[bool] = mapped_column(Boolean, default=False)
+    
     closed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     close_reason: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
 

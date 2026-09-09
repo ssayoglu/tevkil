@@ -20,9 +20,17 @@ class Base(DeclarativeBase):
     pass
 
 
+from sqlalchemy import text
+
+
 async def init_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        try:
+            await conn.execute(text("ALTER TABLE bridge_sessions ADD COLUMN IF NOT EXISTS creator_agreed BOOLEAN DEFAULT FALSE;"))
+            await conn.execute(text("ALTER TABLE bridge_sessions ADD COLUMN IF NOT EXISTS applicant_agreed BOOLEAN DEFAULT FALSE;"))
+        except Exception as e:
+            print(f"[DB] Migration uyarısı: {e}")
 
 
 async def get_db_session():

@@ -70,89 +70,144 @@ async def handle_agree(callback: CallbackQuery, db: AsyncSession):
         await callback.answer("⚠️ Sadece bu tevkil görüşmesinde aktif olan taraflar onay verebilir.", show_alert=True)
         return
 
-    now = datetime.utcnow()
-    session.is_active = False
-    session.closed_at = now
-    session.close_reason = "AGREED"
+    is_creator = (user.id == session.creator_id)
+    if is_creator:
+        session.creator_agreed = True
+    else:
+        session.applicant_agreed = True
 
-    if listing:
-        listing.status = "COMPLETED"
-        listing.completed_at = now
-
-    # Başvuru durumunu güncelle
-    app_stmt = (
-        update(Application)
-        .where(Application.listing_id == listing_id, Application.user_id == session.applicant_id)
-        .values(status="ACCEPTED")
-    )
-    await db.execute(app_stmt)
-
-    # Başarılı tevkil için her iki tarafa +5 rank puanı ekle
-    await RankService.award_successful_tevkil(session.creator_id, session.applicant_id, db)
     await db.commit()
 
-    # Redis köprüsünü sonlandır
-    await RedisQueueService.remove_active_bridge(session.creator_id)
-    await RedisQueueService.remove_active_bridge(session.applicant_id)
+    # ÇİFT TARAFLI ONAY KONTROLÜ: Her iki taraf da [Anlaştık] dedi mi?
+    both_agreed = (session.creator_agreed and session.applicant_agreed)
 
-    # Butona basan tarafa bildirim
-    try:
-        await callback.message.edit_text(
-            f"🤝 <b>Tevkil Anlaşması Tamamlandı</b>\n\n"
-            f"#{listing_id} numaralı tevkil ilanı için meslektaşınız ile anlaşma sağlandığı onaylanmıştır. "
-            f"⭐ Başarılı işlem için hesabınıza <b>+{RankService.POINTS_PER_SUCCESSFUL_TEVKIL} Rank Puanı</b> eklendi.\n"
-            f"Görüşme güvenli şekilde kapatılmıştır. İyi çalışmalar dileriz.",
-            parse_mode="HTML"
+    if both_agreed:
+        now = datetime.utcnow()
+        session.is_active = False
+        session.closed_at = now
+        session.close_reason = "AGREED"
+
+        if listing:
+            listing.status = "COMPLETED"
+            listing.completed_at = now
+
+        # Başvuru durumunu güncelle
+        app_stmt = (
+            update(Application)
+            .where(Application.listing_id == listing_id, Application.user_id == session.applicant_id)
+            .values(status="ACCEPTED")
         )
-    except Exception:
-        pass
+        await db.execute(app_stmt)
 
-    # Diğer tarafa bildirim
-    partner_id = session.applicant_id if user.id == session.creator_id else session.creator_id
-    try:
-        await callback.bot.send_message(
-            chat_id=partner_id,
-            text=(
-                f"🤝 <b>Tebrikler! Tevkil Anlaşması Onaylandı</b>\n\n"
-                f"#{listing_id} numaralı tevkil ilanı için meslektaşınız tarafından anlaşma teyit edildi. "
-                f"⭐ Başarılı tevkil için hesabınıza <b>+{RankService.POINTS_PER_SUCCESSFUL_TEVKIL} Rank Puanı</b> eklendi.\n"
-                f"Görüşme sonlandırılmıştır. Görevinizde başarılar dileriz."
-            ),
-            parse_mode="HTML"
-        )
-    except Exception:
-        pass
+        # Başarılı tevkil için her iki tarafa +5 rank puanı ekle
+        await RankService.award_successful_tevkil(session.creator_id, session.applicant_id, db)
+        await db.commit()
 
-    # Ana gruba sonuç bildirimi
-    if listing and listing.group_id:
+        # Redis köprüsünü sonlandır
+        await RedisQueueService.remove_active_bridge(session.creator_id)
+        await RedisQueueService.remove_active_bridge(session.applicant_id)
+
+        # Butona basan tarafa bildirim
+        try:
+            await callback.message.edit_text(
+                f"🤝 <b>Tevkil Anlaşması Karşılıklı Onaylandı!</b>\n\n"
+                f"#{listing_id} numaralı tevkil ilanı için her iki meslektaşımız da anlaşmayı teyit etmiştir.\n"
+                f"⭐ Başarılı işlem için hesabınıza <b>+{RankService.POINTS_PER_SUCCESSFUL_TEVKIL} Rank Puanı</b> eklendi.\n"
+                f"Görüşme güvenli şekilde tamamlanmıştır. İyi çalışmalar dileriz.",
+                parse_mode="HTML"
+            )
+        except Exception:
+            pass
+
+        # Diğer tarafa bildirim
+        partner_id = session.applicant_id if is_creator else session.creator_id
         try:
             await callback.bot.send_message(
-                chat_id=listing.group_id,
+                chat_id=partner_id,
                 text=(
-                    f"✅ <b>Tevkil Başarıyla Sonuçlandı</b>\n\n"
-                    f"#{listing_id} numaralı tevkil ilanı için taraflar arasında anlaşma sağlanmıştır. "
-                    f"İlan kapanmıştır."
+                    f"🤝 <b>Tebrikler! Tevkil Anlaşması Karşılıklı Onaylandı!</b>\n\n"
+                    f"#{listing_id} numaralı tevkil ilanı için meslektaşınız da anlaşmayı teyit etti.\n"
+                    f"⭐ Başarılı tevkil için hesabınıza <b>+{RankService.POINTS_PER_SUCCESSFUL_TEVKIL} Rank Puanı</b> eklendi.\n"
+                    f"Görüşme tamamlanmıştır. Görevinizde başarılar dileriz."
                 ),
                 parse_mode="HTML"
             )
         except Exception:
             pass
 
-        # Gruptaki panoyu güncelle
-        await update_group_listing_board(callback.bot, listing, db=db)
+        # Ana gruba sonuç bildirimi
+        if listing and listing.group_id:
+            try:
+                await callback.bot.send_message(
+                    chat_id=listing.group_id,
+                    text=(
+                        f"✅ <b>Tevkil Başarıyla Sonuçlandı</b>\n\n"
+                        f"#{listing_id} numaralı tevkil ilanı için taraflar arasında karşılıklı anlaşma sağlanmıştır. "
+                        f"İlan kapanmıştır."
+                    ),
+                    parse_mode="HTML"
+                )
+            except Exception:
+                pass
 
-    # Admin grubuna rapor
-    await AuditService.notify_admin_event(
-        bot=callback.bot,
-        text=(
-            f"✅ <b>[ANLAŞMA SAĞLANDI]</b>\n"
-            f"📋 <b>İlan ID:</b> #{listing_id}\n"
-            f"👤 <b>İlan Sahibi ID:</b> <code>{session.creator_id}</code>\n"
-            f"👤 <b>Seçilen Aday ID:</b> <code>{session.applicant_id}</code>\n"
-            f"⭐ <b>Kazanılan Puan:</b> Her iki tarafa +{RankService.POINTS_PER_SUCCESSFUL_TEVKIL} Puan\n"
-            f"⏰ <b>Bitiş Zamanı:</b> {now.strftime('%d.%m.%Y %H:%M')}"
+            # Gruptaki panoyu güncelle
+            await update_group_listing_board(callback.bot, listing, db=db)
+
+        # Admin grubuna rapor
+        await AuditService.notify_admin_event(
+            bot=callback.bot,
+            text=(
+                f"✅ <b>[KARŞILIKLI ANLAŞMA SAĞLANDI]</b>\n"
+                f"📋 <b>İlan ID:</b> #{listing_id}\n"
+                f"👤 <b>İlan Sahibi ID:</b> <code>{session.creator_id}</code>\n"
+                f"👤 <b>Seçilen Aday ID:</b> <code>{session.applicant_id}</code>\n"
+                f"⭐ <b>Kazanılan Puan:</b> Her iki tarafa +{RankService.POINTS_PER_SUCCESSFUL_TEVKIL} Puan\n"
+                f"⏰ <b>Bitiş Zamanı:</b> {now.strftime('%d.%m.%Y %H:%M')}"
+            )
         )
-    )
+
+    else:
+        # Tek taraf onayladı, karşı tarafın onayı bekleniyor
+        partner_id = session.applicant_id if is_creator else session.creator_id
+        
+        try:
+            await callback.message.edit_text(
+                f"⏳ <b>Anlaşma Onayınız Alındı</b>\n\n"
+                f"#{listing_id} numaralı tevkil için anlaşma teyidiniz sisteme kaydedildi.\n"
+                f"ℹ️ Sürecin tamamlanıp puanların tanımlanması için <b>karşı meslektaşımızın da [🤝 Anlaştık] butonuna basması bekleniyor...</b>\n\n"
+                f"<i>Fikriniz değişirse veya anlaşmazlık çıkarsa iptal edebilirsiniz:</i>",
+                reply_markup=InlineKeyboardMarkup(
+                    inline_keyboard=[
+                        [
+                            InlineKeyboardButton(text="❌ Anlaşamadık / İptal Et", callback_data=f"disagree:{listing_id}")
+                        ]
+                    ]
+                ),
+                parse_mode="HTML"
+            )
+        except Exception:
+            pass
+
+        try:
+            await callback.bot.send_message(
+                chat_id=partner_id,
+                text=(
+                    f"🔔 <b>Meslektaşınız Anlaşmayı Onayladı! (#{listing_id})</b>\n\n"
+                    f"İletişimde olduğunuz meslektaşınız <b>[🤝 Anlaştık]</b> bildiriminde bulundu.\n\n"
+                    f"Anlaşma sağlandıysa lütfen siz de onaylayınız. Karşılıklı onay verildiğinde tevkil tamamlanacak ve puanınız eklenecektir:"
+                ),
+                reply_markup=InlineKeyboardMarkup(
+                    inline_keyboard=[
+                        [
+                            InlineKeyboardButton(text="🤝 Ben de Anlaştım", callback_data=f"agree:{listing_id}"),
+                            InlineKeyboardButton(text="❌ Anlaşamadık", callback_data=f"disagree:{listing_id}")
+                        ]
+                    ]
+                ),
+                parse_mode="HTML"
+            )
+        except Exception:
+            pass
 
 
 @router.callback_query(F.data.startswith("disagree:"))
@@ -335,12 +390,14 @@ async def handle_reason_selected(callback: CallbackQuery, db: AsyncSession):
 
         # Admin Denetim Grubuna Detaylı Bilgi
         admin_alert = (
-            f"⚠️ <b>[ANLAŞMAZLIK DEĞERLENDİRMESİ — İlan #{listing_id}]</b>\n"
-            f"👤 <b>İlan Sahibi:</b> <code>{session.creator_id}</code>\n"
-            f"👤 <b>Başvuran ({current_candidate_rank}. Sıra Aday):</b> <code>{session.applicant_id}</code>\n"
-            f"📌 <b>Bildiren:</b> {reporter_title} | <b>Gerekçe:</b> {reason_text}\n\n"
+            f"⚠️ <b>[ANLAŞMAZLIK BİLDİRİMİ — İlan #{listing_id}]</b>\n"
+            f"📋 <b>İlan ID:</b> #{listing_id}\n"
+            f"👤 <b>İlan Sahibi:</b> <code>{session.creator_id}</code> (Onay: {'✅ Onayladı' if session.creator_agreed else '❌ Onaylamadı'})\n"
+            f"👤 <b>Başvuran ({current_candidate_rank}. Sıra Aday):</b> <code>{session.applicant_id}</code> (Onay: {'✅ Onayladı' if session.applicant_agreed else '❌ Onaylamadı'})\n"
+            f"📌 <b>Anlaşmazlık Bildiren:</b> {reporter_title} (ID: <code>{callback.from_user.id}</code>)\n"
+            f"📝 <b>Bildirilen Gerekçe:</b> <b>{reason_text}</b>\n\n"
             f"🛠️ <b>Admin Müdahalesi:</b>\n"
-            f"• Kısıtla: <code>/kullanici_kisitla {violator_id} 5</code>\n"
+            f"• Uzaklaştır: <code>/kullanici_uzaklastir {violator_id} 5</code>\n"
             f"• Ceza Puanı: <code>/ceza_puani_ver {violator_id} 10 Anlaşmazlık ihlali</code>"
         )
         await AuditService.notify_admin_event(callback.bot, admin_alert)
