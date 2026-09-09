@@ -95,41 +95,74 @@ class BridgeService:
             group_id=group_id
         )
 
-        # Şartnamedeki Süreç Başlatma Mesajları:
-        # İlan Sahibine:
+        # 1. Ana Grupta "Görüşme Başladı" Duyurusu Yap
+        if group_id:
+            try:
+                await bot.send_message(
+                    chat_id=group_id,
+                    text=(
+                        f"📢 <b>[GÖRÜŞME BAŞLADI — İlan #{listing_id}]</b>\n\n"
+                        f"🟢 İlan sahibi meslektaşımız ile <b>{candidate_rank}. sıradaki başvuran aday</b> "
+                        f"arasında anonim görüşme başlatılmıştır.\n\n"
+                        f"<i>(Taraflar bot özel mesajı üzerinden güvenli ve anonim olarak yazışmaktadır.)</i>"
+                    ),
+                    parse_mode="HTML"
+                )
+            except Exception as e:
+                print(f"[BridgeService] Gruba görüşme başladı duyurusu iletilemedi: {e}")
+
+        # 2. İlan Sahibine DM Bildirimi
+        creator_delivered = False
         try:
             await bot.send_message(
                 chat_id=creator_id,
                 text=(
                     f"📌 <b>#{listing_id} Numaralı Tevkil İlanınız İçin {candidate_rank}. Sıra Başvurusu Alındı.</b>\n\n"
-                    f"⚠️ <i>Lütfen görevin detaylarını yazarak iletişimi başlatın.</i>\n\n"
+                    f"⚠️ <i>Lütfen görevin detaylarını buraya yazarak iletişimi başlatın.</i>\n\n"
                     f"⏳ <b>Önemli Kural:</b> İlk mesajı <b>30 dakika</b> içerisinde iletmeniz gerekmektedir, "
                     f"aksi halde ilanınız iptal edilecek, hesabınıza +20 Ceza Puanı eklenecek ve 5 gün kısıtlanacaktır.\n\n"
-                    f"🛡️ <b>Güvenlik Hatırlatması:</b> Size Telegram grubundan profilinize tıklayıp 'hemen yaparım' diyerek "
-                    f"harici özel mesaj atanları <b>kesinlikle dikkate almayınız</b>. Tüm süreci bu bot üzerinden yürütünüz.\n\n"
+                    f"🛡️ <b>Güvenlik Uyarısı:</b> Gruptan profilinize tıklayıp 'hemen yaparım' diyerek "
+                    f"özelden yazanları dikkate almayınız. Tüm süreci bu bot üzerinden yürütünüz.\n\n"
                     f"Görüşme tamamlandığında aşağıdaki butonlardan durumu teyit edebilirsiniz:"
                 ),
                 reply_markup=get_confirmation_keyboard(listing_id),
                 parse_mode="HTML"
             )
+            creator_delivered = True
         except Exception as e:
-            print(f"[BridgeService] İlan sahibine başlatma mesajı gönderilemedi: {e}")
+            print(f"[BridgeService] İlan sahibine başlatma mesajı gönderilemedi (Kullanıcı botu başlatmamış olabilir): {e}")
 
-        # Adaya:
+        # Eğer ilan sahibi botu başlatmadığı için mesaj gitmediyse gruba uyarı gönder
+        if not creator_delivered and group_id:
+            try:
+                await bot.send_message(
+                    chat_id=group_id,
+                    text=(
+                        f"⚠️ <b>Sayın İlan Sahibi Meslektaşımız (#{listing_id}):</b>\n"
+                        f"{candidate_rank}. sıra başvurusu alındı ancak botu özelden henüz başlatmadığınız için "
+                        f"adayla görüşme başlatılamadı.\n\n"
+                        f"👉 Lütfen @Tevkil_Denetim_Merkezi_bot botuna tıklayıp <b>/start</b> diyerek görüşmeyi başlatınız!"
+                    ),
+                    parse_mode="HTML"
+                )
+            except Exception:
+                pass
+
+        # 3. Adaya DM Bildirimi
         try:
             await bot.send_message(
                 chat_id=applicant_id,
                 text=(
-                    f"🎉 <b>Tevkil İçin {candidate_rank}. Sıradan Seçildiniz.</b>\n\n"
-                    f"İlan sahibi detayları ilettiğinde size buradan ulaştırılacaktır. "
-                    f"Tüm mesajlar, fotoğraflar ve PDF dosyaları bu sohbet üzerinden anonim olarak iletilir."
+                    f"🎉 <b>Tevkil İçin {candidate_rank}. Sıradan Seçildiniz. (İlan #{listing_id})</b>\n\n"
+                    f"İlan sahibi meslektaşımız detayları ilettiğinde size buradan ulaştırılacaktır. "
+                    f"Buradan yazacağınız tüm mesajlar, fotoğraflar, ses kayıtları ve PDF dosyaları anonim olarak karşı tarafa iletilir."
                 ),
                 parse_mode="HTML"
             )
         except Exception as e:
-            print(f"[BridgeService] Adaya başlatma mesajı gönderilemedi: {e}")
+            print(f"[BridgeService] Adaya başlatma mesajı gönderilemedi (Kullanıcı botu başlatmamış olabilir): {e}")
 
-        # Admin grubuna bildirim
+        # 4. Admin grubuna bildirim
         await AuditService.notify_admin_event(
             bot,
             f"🔗 <b>[KÖPRÜ BAŞLATILDI — İlan #{listing_id}]</b>\n"
@@ -201,7 +234,7 @@ class BridgeService:
                 return
         except Exception as e:
             print(f"[BridgeService] Mesaj partnere iletilemedi: {e}")
-            await sender_msg.reply("❌ Mesaj karşı tarafa ulaştırılamadı.")
+            await sender_msg.reply("❌ Mesaj karşı tarafa ulaştırılamadı (Karşı taraf botu özelden başlatmamış veya engellemiş olabilir).")
             return
 
         # 2. Admin Denetim Grubuna ve DB'ye anlık loglama

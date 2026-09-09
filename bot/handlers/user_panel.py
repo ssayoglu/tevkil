@@ -7,6 +7,8 @@ from sqlalchemy import select
 from bot.database.models import User, Listing, Application
 from bot.services.rank_service import RankService
 from bot.services.baro_service import BaroVerificationService
+from bot.services.redis_queue import RedisQueueService
+from bot.services.bridge_service import get_confirmation_keyboard
 from bot.utils.time_utils import format_datetime_tr, format_date_short_tr
 
 router = Router()
@@ -35,6 +37,34 @@ async def cmd_start(message: Message, db: AsyncSession):
     avg_score = await RankService.get_system_average_score(db)
     handicap = RankService.determine_handicap_level(net_score, avg_score, user.penalty_points)
 
+    # Aktif bir köprü görüşmesi var mı kontrol et
+    active_bridge = await RedisQueueService.get_active_bridge(sender.id)
+    if active_bridge:
+        listing_id = active_bridge["listing_id"]
+        role = active_bridge["role"]
+        rank_idx = active_bridge.get("candidate_rank", 1)
+
+        if role == "CREATOR":
+            await message.reply(
+                f"🔗 <b>Aktif Tevkil Görüşmeniz Bulunmaktadır! (İlan #{listing_id})</b>\n\n"
+                f"👤 <b>Görüştüğünüz Kişi:</b> {rank_idx}. Sıradaki Başvuran Aday\n\n"
+                f"💬 <b>İletişim:</b> Bu sohbete yazacağınız her mesaj, fotoğraf, ses kaydı ve PDF "
+                f"karşı tarafa <b>anonim olarak iletilir</b>.\n\n"
+                f"Görüşme tamamlandığında aşağıdaki butonlardan durumu teyit edebilirsiniz:",
+                reply_markup=get_confirmation_keyboard(listing_id),
+                parse_mode="HTML"
+            )
+            return
+        else:
+            await message.reply(
+                f"🔗 <b>Aktif Tevkil Görüşmeniz Bulunmaktadır! (İlan #{listing_id})</b>\n\n"
+                f"👤 <b>Görüştüğünüz Kişi:</b> İlan Sahibi Meslektaşımız\n\n"
+                f"💬 <b>İletişim:</b> Bu sohbete yazacağınız her mesaj, fotoğraf, ses kaydı ve PDF "
+                f"ilan sahibine <b>anonim olarak iletilir</b>.",
+                parse_mode="HTML"
+            )
+            return
+
     handicap_text = f"⚠️ <b>Aktif Sıra Handikapı:</b> Seviye {handicap}" if handicap > 0 else "✅ <b>Handikap Durumu:</b> Yok (Öncelikli Başvuru)"
 
     text = (
@@ -61,8 +91,9 @@ async def cmd_help(message: Message):
     text = (
         "📚 <b>TEVKİL BOTU KULLANIM REHBERİ VE KURALLAR</b>\n\n"
         "1. <b>İlan Açma:</b>\n"
-        "   Hukuk gruplarında paylaştığınız mesajda <code>'tevkildir'</code> kelimesi geçmelidir. "
-        "   Bot ilanınızı otomatik algılar ve altına <code>[📋 Başvur]</code> butonu ekler.\n\n"
+        "   Hukuk gruplarında paylaştığınız mesajda <code>'tevkildir'</code> veya adliye olan il/ilçe adı "
+        "   (örn. Bursa, Bayramiç, Çağlayan vb.) ile duruşma/evrak bilgisi geçmelidir. "
+        "   Bot ilanınızı otomatik algılar, mesajınızı siler ve grupta anonim butonlu pano oluşturur.\n\n"
         "2. <b>Milisaniye Sıralama Sistemi:</b>\n"
         "   Butona tıklayan meslektaşlarımız milisaniye hassasiyetiyle sıraya alınır. "
         "   Sadece 1. sıradaki meslektaşımızla doğrudan DM görüşmesi başlatılır.\n\n"
@@ -72,7 +103,7 @@ async def cmd_help(message: Message):
         "   puanına göre <b>1-2-3-4 sıra geriden</b> başlayacak şekilde adil handikap uygulanır.\n\n"
         "4. <b>🚨 TARİFE ALTI ÜCRET YASAĞI (DİREKT BAN):</b>\n"
         "   Baro Asgari Ücret Tarifesi / Grup Tarifesi altında ücret teklif edilmesi kesinlikle yasaktır. "
-        "   Tarife altı teklif tespitinde/raporlanmasında ilgili kullanıcı <b>DİREKT BANLANIR (+30 Ceza Puanı)</b>.\n\n"
+        "   Tarife altı teklif tespitinde ilgili kullanıcı <b>DİREKT BANLANIR (+30 Ceza Puanı)</b>.\n\n"
         "5. <b>⏳ 30 Dakika Kuralı:</b>\n"
         "   Eşleşme sağlandıktan sonra ilan sahibi 30 dakika içinde adaya ilk mesajı göndermelidir. "
         "   Aksi halde ilan iptal edilir, hesaba <b>+20 Ceza Puanı</b> işlenir ve <b>5 gün sistemden men</b> edilir.\n\n"

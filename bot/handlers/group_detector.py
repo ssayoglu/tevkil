@@ -12,7 +12,6 @@ from bot.utils.courthouses import TURKISH_COURTHOUSES, normalize_text_for_search
 
 router = Router()
 
-# Tevkil niyet ve görev bağlamı anahtar kelimeleri
 TASK_CONTEXT_KEYWORDS = [
     r"\bdurusma\w*",
     r"\bkatilacak\w*",
@@ -40,7 +39,6 @@ TASK_CONTEXT_KEYWORDS = [
     r"\btevkil\w*"
 ]
 
-# Negatif istisnalar: Tevkil olmadığını belirten ifadeler
 NEGATIVE_PATTERNS = [
     r"\btevkil\s+degildir\b",
     r"\btevkildir\s+degildir\b",
@@ -51,46 +49,33 @@ NEGATIVE_PATTERNS = [
 
 
 def is_tevkil_message(text: str) -> bool:
-    """
-    Mesajın tevkil ilanı olup olmadığını akıllı NLP / Regex kurallarıyla tespit eder:
-    1. 'tevkil değildir' gibi negatif ifadeler varsa False döner.
-    2. 'tevkildir' ibaresi geçiyorsa True döner.
-    3. Türkiye'de adliyesi olan il/ilçe adı VE duruşma/evrak/katılacak/meslektaş vb. görev bağlamı varsa True döner.
-    """
     if not text:
         return False
 
     norm = normalize_text_for_search(text)
 
-    # 1. Negatif kontrol: "tevkil değildir", "tevkil değil"
     for neg_pat in NEGATIVE_PATTERNS:
         if re.search(neg_pat, norm):
             return False
 
-    # 2. Doğrudan "tevkildir" kontrolü
     if re.search(r"\btevkildir\b", norm):
         return True
 
-    # 3. Adliye İl/İlçe tespiti + Görev/Meslektaş bağlamı kontrolü
-    # Kelimeleri tokenize et
     words = re.findall(r"[a-z0-9]+", norm)
     has_courthouse = False
 
-    # Tekil veya 2'li kelime gruplarında il/ilçe adliye ismi ara
     for w in words:
         if w in TURKISH_COURTHOUSES:
             has_courthouse = True
             break
 
     if not has_courthouse:
-        # İki kelimeli yer adları için kontrol (örn. kdz eregli, 19 mayis)
         for ch in TURKISH_COURTHOUSES:
             if " " in ch and ch in norm:
                 has_courthouse = True
                 break
 
     if has_courthouse:
-        # Görev bağlamı var mı? (duruşma, evrak teslim, katılacak var mı, meslektaşımız vb.)
         for pat in TASK_CONTEXT_KEYWORDS:
             if re.search(pat, norm):
                 return True
@@ -105,6 +90,12 @@ def build_apply_keyboard(listing_id: int) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(
                     text="📋 Başvur (Sıraya Gir)",
                     callback_data=f"apply:{listing_id}"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🤖 Botu Başlat (DM)",
+                    url="https://t.me/Tevkil_Denetim_Merkezi_bot?start=1"
                 )
             ]
         ]
@@ -187,8 +178,9 @@ async def detect_tevkil_post(message: Message, db: AsyncSession):
         f"<i>{text}</i>\n\n"
         f"📋 <b>Canlı Başvuru Sıralaması:</b>\n"
         f"<i>(Henüz başvuru yapılmadı. İlk tıklayan görüşme hakkı kazanır.)</i>\n\n"
-        f"🚨 <b>ÖNEMLİ KURAL:</b> İlan sahibine harici özel mesaj atmak ve tarife altı teklifte bulunmak <b>DİREKT BAN</b> sebebidir!\n\n"
-        f"👇 <i>Yalnızca aşağıdaki butona tıklayarak adil sıraya giriniz:</i>"
+        f"🚨 <b>ÖNEMLİ:</b> İlan sahibine özelden yazmak ve tarife altı teklif vermek <b>DİREKT BAN</b> sebebidir!\n"
+        f"ℹ️ <i>Başvuran meslektaşlarımızın DM bildirimleri alabilmesi için @Tevkil_Denetim_Merkezi_bot botunu başlatması gerekmektedir.</i>\n\n"
+        f"👇 <i>Aşağıdaki butona tıklayarak adil sıraya girebilirsiniz:</i>"
     )
 
     if is_deleted:

@@ -25,6 +25,7 @@ async def test_cmd_start(mocker):
         penalty_points=0
     )
     db.execute.return_value = mock_res
+    mocker.patch("bot.handlers.user_panel.RedisQueueService.get_active_bridge", return_value=None)
 
     await cmd_start(message, db)
     assert message.reply.called
