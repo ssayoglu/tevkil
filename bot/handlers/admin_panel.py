@@ -136,13 +136,52 @@ async def get_active_sessions_text(db: AsyncSession) -> str:
     return "\n".join(lines)
 
 
-@router.message(Command("admin_yardim", "admin_help"))
+def render_test_commands_guide() -> str:
+    return (
+        "🧪 <b>TEST REHBERİ VE YÖNETİM KOMUTLARI</b>\n\n"
+        "🧹 <b>Kısıtları ve Oturumları Sıfırlama:</b>\n"
+        "• <code>/sifirla</code> veya <code>/tum_kisitlari_kaldir</code>\n"
+        "  <i>Tüm kullanıcıların banlarını, ceza puanlarını sıfırlar, köprü oturumlarını temizler.</i>\n\n"
+        "📜 <b>İlan Denetim ve Mesaj Logları:</b>\n"
+        "• <code>#12 log</code> veya <code>/log 12</code>\n"
+        "  <i>İlanın tüm mesajlaşma geçmişini ve yetki belgelerini döker (3 ay saklanır).</i>\n\n"
+        "🕵️ <b>Kullanıcı Dosyası Sorgulama:</b>\n"
+        "• <code>@kullanici kimdir</code> veya <code>/kimdir @kullanici</code>\n"
+        "  <i>Kullanıcının güven puanını, ceza geçmişini ve baro kaydını gösterir.</i>\n\n"
+        "👥 <b>Kuyruk ve İlan Detayı:</b>\n"
+        "• <code>/ilan_detay &lt;ilan_id&gt;</code>\n"
+        "  <i>Başvuru sırasını, milisaniye skorlarını ve durumunu listeler.</i>\n\n"
+        "🛑 <b>Müdahale ve Kısıtlama Komutları:</b>\n"
+        "• <code>/durdur &lt;ilan_id&gt;</code> — Görüşmeyi derhal keser.\n"
+        "• <code>/kullanici_kisitla &lt;user_id&gt; [gün] [sebep]</code> — Ban uygular.\n"
+        "• <code>/tarife_ban &lt;user_id&gt;</code> — Tarife altı teklif cezası (15 gün + 30 puan).\n"
+        "• <code>/ceza_kaldir &lt;user_id&gt;</code> — Kısıtlamayı kaldırır.\n"
+        "• <code>/ceza_puani_ver &lt;user_id&gt; &lt;puan&gt;</code> — Ceza puanı ekler.\n"
+        "• <code>/puan_ekle &lt;user_id&gt; &lt;puan&gt;</code> — Rank puanı ekler.\n\n"
+        "📊 <b>Genel Listeler ve Durum:</b>\n"
+        "• <code>/aktif_ilanlar</code> — Devam eden görüşmeler.\n"
+        "• <code>/kara_liste</code> — Yasaklı kullanıcılar.\n"
+        "• <code>/istatistik</code> — Sistem geneli istatistikler."
+    )
+
+
+@router.message(Command("test", "testler", "test_yardim", "test_komutlari", "testrehberi", prefix="/!"))
+async def cmd_test_help(message: Message):
+    if not is_admin_chat(message):
+        return
+    text = render_test_commands_guide()
+    await message.reply(text, reply_markup=get_admin_main_keyboard(), parse_mode="HTML")
+
+
+@router.message(Command("admin_yardim", "admin_help", "yardim", "help", prefix="/!"))
 async def cmd_admin_help(message: Message):
     if not is_admin_chat(message):
         return
 
     text = (
         "🛠️ <b>ADMİN DENETİM PANELİ KOMUTLARI</b>\n\n"
+        "• <code>!test</code> veya <code>/test</code>\n"
+        "  Test süresince kullanabileceğiniz tüm test ve yönetim komutlarını listeler.\n\n"
         "• <code>#x log</code> veya <code>/log &lt;ilan_id&gt;</code>\n"
         "  İlanın tüm mesaj ve denetim loglarını döker (Loglar 3 ay / 90 gün saklanır).\n\n"
         "• <code>@kullanici kimdir</code> veya <code>/kimdir &lt;user_id&gt;</code>\n"
@@ -1002,8 +1041,10 @@ async def handle_admin_natural_query(message: Message, db: AsyncSession):
     if not text:
         return
 
-    # Komut ise zaten üst handler yakalar
-    if text.startswith("/"):
+    # 0. "!test", "test komutları", "test rehberi" yakala
+    if re.search(r"^(?:!test|/test|test\s+komutlar[ıi]|test\s+rehberi|test\s+menüsü)\b", text, re.IGNORECASE):
+        guide = render_test_commands_guide()
+        await message.reply(guide, reply_markup=get_admin_main_keyboard(), parse_mode="HTML")
         return
 
     # 1. "#x log", "log #x", "x log", "ilan #x log" veya reply olarak "log" yakala

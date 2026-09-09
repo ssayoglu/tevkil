@@ -102,3 +102,20 @@ async def test_render_listing_logs_dossier():
     assert "yetki.pdf" in dossier
     assert "3 ay / 90 gün" in dossier
     assert kb is not None
+
+
+@pytest.mark.asyncio
+async def test_cmd_test_help():
+    from bot.handlers.admin_panel import cmd_test_help
+    settings.admin_chat_id = -1001234567890
+    message = MagicMock(spec=Message)
+    message.chat = Chat(id=-1001234567890, type="supergroup")
+    message.reply = AsyncMock()
+
+    await cmd_test_help(message)
+    assert message.reply.called
+    reply_text = message.reply.call_args[0][0]
+    assert "TEST REHBERİ" in reply_text
+    assert "/sifirla" in reply_text
+    assert "#12 log" in reply_text
+    assert "@kullanici kimdir" in reply_text
