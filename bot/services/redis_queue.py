@@ -125,3 +125,24 @@ class RedisQueueService:
         lock_key = f"lock:update_msg:{listing_id}"
         res = await redis_client.set(lock_key, "1", nx=True, px=int(timeout_sec * 1000))
         return bool(res)
+
+    @staticmethod
+    async def push_pending_message(user_id: int, message_payload: Dict[str, Any]):
+        """
+        Kullanıcı botu henüz başlatmamışsa mesajı Redis kuyruğunda bekletir.
+        """
+        key = f"pending_msgs:{user_id}"
+        await redis_client.rpush(key, json.dumps(message_payload))
+        await redis_client.expire(key, 86400)
+
+    @staticmethod
+    async def pop_all_pending_messages(user_id: int) -> List[Dict[str, Any]]:
+        """
+        Kullanıcının bekleyen tüm mesajlarını çeker ve kuyruktan temizler.
+        """
+        key = f"pending_msgs:{user_id}"
+        items = await redis_client.lrange(key, 0, -1)
+        if items:
+            await redis_client.delete(key)
+            return [json.loads(x) for x in items]
+        return []

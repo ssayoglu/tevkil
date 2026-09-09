@@ -148,15 +148,17 @@ class BridgeService:
             except Exception:
                 pass
 
-        # 3. Adaya DM Bildirimi
+        # 3. Adaya DM Bildirimi (Anlaştık / Anlaşamadık butonlarıyla birlikte)
         try:
             await bot.send_message(
                 chat_id=applicant_id,
                 text=(
                     f"🎉 <b>Tevkil İçin {candidate_rank}. Sıradan Seçildiniz. (İlan #{listing_id})</b>\n\n"
-                    f"İlan sahibi meslektaşımız detayları ilettiğinde size buradan ulaştırılacaktır. "
-                    f"Buradan yazacağınız tüm mesajlar, fotoğraflar, ses kayıtları ve PDF dosyaları anonim olarak karşı tarafa iletilir."
+                    f"İlan sahibi meslektaşımız ile anonim görüşme kanalınız açılmıştır.\n"
+                    f"💬 Buradan yazacağınız tüm mesajlar, fotoğraflar, ses kayıtları ve PDF dosyaları anonim olarak iletilir.\n\n"
+                    f"Görüşme tamamlandığında veya vazgeçmek istediğinizde aşağıdaki butonları kullanabilirsiniz:"
                 ),
+                reply_markup=get_confirmation_keyboard(listing_id),
                 parse_mode="HTML"
             )
         except Exception as e:
@@ -172,6 +174,29 @@ class BridgeService:
         )
 
         return session
+
+    @staticmethod
+    async def flush_pending_messages(bot: Bot, user_id: int):
+        """
+        Kullanıcı bota girdiğinde kuyrukta bekleyen tüm mesajları kendisine iletir.
+        """
+        pending = await RedisQueueService.pop_all_pending_messages(user_id)
+        if not pending:
+            return
+
+        for p in pending:
+            try:
+                mtype = p.get("type")
+                if mtype == "text":
+                    await bot.send_message(chat_id=user_id, text=p["text"], parse_mode="HTML")
+                elif mtype == "photo":
+                    await bot.send_photo(chat_id=user_id, photo=p["file_id"], caption=p.get("caption"), parse_mode="HTML")
+                elif mtype == "document":
+                    await bot.send_document(chat_id=user_id, document=p["file_id"], caption=p.get("caption"), parse_mode="HTML")
+                elif mtype == "voice":
+                    await bot.send_voice(chat_id=user_id, voice=p["file_id"], caption=p.get("caption"), parse_mode="HTML")
+            except Exception as e:
+                print(f"[BridgeService] Kuyruktaki mesaj iletilemedi: {e}")
 
     @staticmethod
     async def forward_bridge_message(bot: Bot, sender_msg: Message, bridge_info: Dict[str, Any]):
@@ -210,32 +235,47 @@ class BridgeService:
             sender_role_str = f"{candidate_rank}. Sıra Aday"
             target_role_str = "İlan Sahibi"
 
-        # 1. Partner'a Anonim İletim
+        # 1. Partner'a Anonim İletim veya Kuyruğa Alma
         text_body = sender_msg.text or sender_msg.caption or ""
-        
+        msg_delivered = False
+        payload = None
+
         try:
             if sender_msg.photo:
                 photo_id = sender_msg.photo[-1].file_id
                 cap = f"{sender_tag}\n\n{text_body}" if text_body else sender_tag
+                payload = {"type": "photo", "file_id": photo_id, "caption": cap[:1024]}
                 await bot.send_photo(chat_id=partner_id, photo=photo_id, caption=cap[:1024], parse_mode="HTML")
+                msg_delivered = True
             elif sender_msg.document:
                 doc_id = sender_msg.document.file_id
                 cap = f"{sender_tag}\n\n{text_body}" if text_body else sender_tag
+                payload = {"type": "document", "file_id": doc_id, "caption": cap[:1024]}
                 await bot.send_document(chat_id=partner_id, document=doc_id, caption=cap[:1024], parse_mode="HTML")
+                msg_delivered = True
             elif sender_msg.voice:
                 voice_id = sender_msg.voice.file_id
                 cap = f"{sender_tag}\n\n{text_body}" if text_body else sender_tag
+                payload = {"type": "voice", "file_id": voice_id, "caption": cap[:1024]}
                 await bot.send_voice(chat_id=partner_id, voice=voice_id, caption=cap[:1024], parse_mode="HTML")
+                msg_delivered = True
             elif sender_msg.text:
                 full_msg = f"{sender_tag}\n\n{text_body}"
+                payload = {"type": "text", "text": full_msg}
                 await bot.send_message(chat_id=partner_id, text=full_msg, parse_mode="HTML")
+                msg_delivered = True
             else:
                 await sender_msg.reply("⚠️ Sadece metin, fotoğraf, ses kaydı ve PDF/belge gönderimi desteklenmektedir.")
                 return
         except Exception as e:
-            print(f"[BridgeService] Mesaj partnere iletilemedi: {e}")
-            await sender_msg.reply("❌ Mesaj karşı tarafa ulaştırılamadı (Karşı taraf botu özelden başlatmamış veya engellemiş olabilir).")
-            return
+            print(f"[BridgeService] Mesaj anlık iletilemedi, kuyruğa alınıyor: {e}")
+            if payload:
+                await RedisQueueService.push_pending_message(partner_id, payload)
+                await sender_msg.reply(
+                    "⏳ <b>Mesajınız Güvenle Alındı ve Kuyruğa Eklendi.</b>\n\n"
+                    "Karşı taraf bot penceresini açtığı an tüm mesajlarınız sırasıyla kendisine iletilecektir.",
+                    parse_mode="HTML"
+                )
 
         # 2. Admin Denetim Grubuna ve DB'ye anlık loglama
         await AuditService.log_and_forward_to_admin(

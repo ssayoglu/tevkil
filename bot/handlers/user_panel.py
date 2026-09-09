@@ -37,6 +37,10 @@ async def cmd_start(message: Message, db: AsyncSession):
     avg_score = await RankService.get_system_average_score(db)
     handicap = RankService.determine_handicap_level(net_score, avg_score, user.penalty_points)
 
+    # Bekleyen mesajlar varsa anında ilet
+    from bot.services.bridge_service import BridgeService
+    await BridgeService.flush_pending_messages(message.bot, sender.id)
+
     # Aktif bir köprü görüşmesi var mı kontrol et
     active_bridge = await RedisQueueService.get_active_bridge(sender.id)
     if active_bridge:
@@ -60,7 +64,9 @@ async def cmd_start(message: Message, db: AsyncSession):
                 f"🔗 <b>Aktif Tevkil Görüşmeniz Bulunmaktadır! (İlan #{listing_id})</b>\n\n"
                 f"👤 <b>Görüştüğünüz Kişi:</b> İlan Sahibi Meslektaşımız\n\n"
                 f"💬 <b>İletişim:</b> Bu sohbete yazacağınız her mesaj, fotoğraf, ses kaydı ve PDF "
-                f"ilan sahibine <b>anonim olarak iletilir</b>.",
+                f"ilan sahibine <b>anonim olarak iletilir</b>.\n\n"
+                f"Görüşme tamamlandığında veya vazgeçmek istediğinizde aşağıdaki butonlardan teyit edebilirsiniz:",
+                reply_markup=get_confirmation_keyboard(listing_id),
                 parse_mode="HTML"
             )
             return

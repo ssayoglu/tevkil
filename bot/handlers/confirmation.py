@@ -54,10 +54,6 @@ async def handle_agree(callback: CallbackQuery, db: AsyncSession):
     res = await db.execute(stmt)
     listing = res.scalar_one_or_none()
 
-    if not listing or listing.creator_id != user.id:
-        await callback.answer("⚠️ Sadece ilan sahibi onay verebilir.", show_alert=True)
-        return
-
     # Aktif oturumu bul
     s_stmt = (
         select(BridgeSession)
@@ -66,8 +62,8 @@ async def handle_agree(callback: CallbackQuery, db: AsyncSession):
     s_res = await db.execute(s_stmt)
     session = s_res.scalar_one_or_none()
 
-    if not session:
-        await callback.answer("Aktif görüşme oturumu bulunamadı.", show_alert=True)
+    if not session or user.id not in [session.creator_id, session.applicant_id]:
+        await callback.answer("⚠️ Sadece bu tevkil görüşmesinin tarafları onay verebilir.", show_alert=True)
         return
 
     now = datetime.utcnow()
@@ -75,8 +71,9 @@ async def handle_agree(callback: CallbackQuery, db: AsyncSession):
     session.closed_at = now
     session.close_reason = "AGREED"
 
-    listing.status = "COMPLETED"
-    listing.completed_at = now
+    if listing:
+        listing.status = "COMPLETED"
+        listing.completed_at = now
 
     # Başvuru durumunu güncelle
     app_stmt = (
@@ -94,22 +91,26 @@ async def handle_agree(callback: CallbackQuery, db: AsyncSession):
     await RedisQueueService.remove_active_bridge(session.creator_id)
     await RedisQueueService.remove_active_bridge(session.applicant_id)
 
-    # İlan sahibine bildirim
-    await callback.message.edit_text(
-        f"🤝 <b>Tevkil Anlaşması Tamamlandı</b>\n\n"
-        f"#{listing_id} numaralı tevkil ilanı için meslektaşınız ile anlaşma sağlandığı kaydedilmiştir. "
-        f"⭐ Başarılı işlem için hesabınıza <b>+{RankService.POINTS_PER_SUCCESSFUL_TEVKIL} Rank Puanı</b> eklendi.\n"
-        f"Görüşme güvenli şekilde kapatılmıştır. İyi çalışmalar dileriz.",
-        parse_mode="HTML"
-    )
+    # Butona basan tarafa bildirim
+    try:
+        await callback.message.edit_text(
+            f"🤝 <b>Tevkil Anlaşması Tamamlandı</b>\n\n"
+            f"#{listing_id} numaralı tevkil ilanı için meslektaşınız ile anlaşma sağlandığı onaylanmıştır. "
+            f"⭐ Başarılı işlem için hesabınıza <b>+{RankService.POINTS_PER_SUCCESSFUL_TEVKIL} Rank Puanı</b> eklendi.\n"
+            f"Görüşme güvenli şekilde kapatılmıştır. İyi çalışmalar dileriz.",
+            parse_mode="HTML"
+        )
+    except Exception:
+        pass
 
-    # Adaya bildirim
+    # Diğer tarafa bildirim
+    partner_id = session.applicant_id if user.id == session.creator_id else session.creator_id
     try:
         await callback.bot.send_message(
-            chat_id=session.applicant_id,
+            chat_id=partner_id,
             text=(
                 f"🤝 <b>Tebrikler! Tevkil Anlaşması Onaylandı</b>\n\n"
-                f"#{listing_id} numaralı tevkil ilanı için ilan sahibi ile anlaşmanız teyit edildi. "
+                f"#{listing_id} numaralı tevkil ilanı için meslektaşınız tarafından anlaşma teyit edildi. "
                 f"⭐ Başarılı tevkil için hesabınıza <b>+{RankService.POINTS_PER_SUCCESSFUL_TEVKIL} Rank Puanı</b> eklendi.\n"
                 f"Görüşme sonlandırılmıştır. Görevinizde başarılar dileriz."
             ),
@@ -119,21 +120,22 @@ async def handle_agree(callback: CallbackQuery, db: AsyncSession):
         pass
 
     # Ana gruba sonuç bildirimi
-    try:
-        await callback.bot.send_message(
-            chat_id=listing.group_id,
-            text=(
-                f"✅ <b>Tevkil Başarıyla Sonuçlandı</b>\n\n"
-                f"#{listing_id} numaralı tevkil ilanı için taraflar arasında anlaşma sağlanmıştır. "
-                f"İlan kapanmıştır."
-            ),
-            parse_mode="HTML"
-        )
-    except Exception:
-        pass
+    if listing and listing.group_id:
+        try:
+            await callback.bot.send_message(
+                chat_id=listing.group_id,
+                text=(
+                    f"✅ <b>Tevkil Başarıyla Sonuçlandı</b>\n\n"
+                    f"#{listing_id} numaralı tevkil ilanı için taraflar arasında anlaşma sağlanmıştır. "
+                    f"İlan kapanmıştır."
+                ),
+                parse_mode="HTML"
+            )
+        except Exception:
+            pass
 
-    # Gruptaki panoyu güncelle
-    await update_group_listing_board(callback.bot, listing, db=db)
+        # Gruptaki panoyu güncelle
+        await update_group_listing_board(callback.bot, listing, db=db)
 
     # Admin grubuna rapor
     await AuditService.notify_admin_event(
@@ -154,19 +156,24 @@ async def handle_disagree_prompt(callback: CallbackQuery, db: AsyncSession):
     listing_id = int(callback.data.split(":")[1])
     user = callback.from_user
 
-    stmt = select(Listing).where(Listing.id == listing_id)
-    res = await db.execute(stmt)
-    listing = res.scalar_one_or_none()
+    s_stmt = (
+        select(BridgeSession)
+        .where(BridgeSession.listing_id == listing_id, BridgeSession.is_active == True)
+    )
+    s_res = await db.execute(s_stmt)
+    session = s_res.scalar_one_or_none()
 
-    if not listing or listing.creator_id != user.id:
-        await callback.answer("⚠️ Sadece ilan sahibi bu işlemi yapabilir.", show_alert=True)
+    if not session or user.id not in [session.creator_id, session.applicant_id]:
+        await callback.answer("⚠️ Sadece bu görüşmenin tarafları anlaşamama bildirebilir.", show_alert=True)
         return
+
+    role_prefix = "creator" if user.id == session.creator_id else "applicant"
 
     await callback.message.edit_text(
         f"❌ <b>Anlaşamama Sebebini Belirtiniz:</b>\n\n"
         f"Lütfen meslektaşınızla anlaşamama gerekçenizi seçiniz.\n"
         f"⚠️ <b>Önemli Kural:</b> Tarife altı ücret tekliflerinde sistem tarafından <b>DİREKT BAN</b> yaptırımı uygulanır:",
-        reply_markup=get_reason_keyboard(listing_id, role_prefix="creator"),
+        reply_markup=get_reason_keyboard(listing_id, role_prefix=role_prefix),
         parse_mode="HTML"
     )
 
@@ -221,13 +228,24 @@ async def handle_reason_selected(callback: CallbackQuery, db: AsyncSession):
 
     # 🚨 ÖZEL ŞART: TARİFE ALTI ÜCRET TEKLİFİNDE DİREKT BAN YAPTIRIMI
     is_tariff_violation = (reason_code == "tarife_alti")
+    if role_prefix == "creator":
+        reporter_id = session.creator_id
+        violator_id = session.applicant_id
+        reporter_title = "İlan Sahibi"
+        violator_title = f"{current_candidate_rank}. Sıra Aday"
+    else:
+        reporter_id = session.applicant_id
+        violator_id = session.creator_id
+        reporter_title = f"{current_candidate_rank}. Sıra Aday"
+        violator_title = "İlan Sahibi"
+
     if is_tariff_violation:
-        # Şikayet edilen adaya doğrudan ban uygula
+        # Şikayet edilen kişiye doğrudan ban uygula
         ban_days = settings.tariff_ban_duration_days
         ban_until = now + timedelta(days=ban_days)
         
-        # Adayı banla ve 30 ceza puanı ekle
-        u_stmt = select(User).where(User.id == session.applicant_id)
+        # Kişiyi banla ve 30 ceza puanı ekle
+        u_stmt = select(User).where(User.id == violator_id)
         u_res = await db.execute(u_stmt)
         violator = u_res.scalar_one_or_none()
         if violator:
@@ -237,7 +255,7 @@ async def handle_reason_selected(callback: CallbackQuery, db: AsyncSession):
             violator.penalty_points += 30
 
             penalty_log = PenaltyLog(
-                user_id=session.applicant_id,
+                user_id=violator_id,
                 points=30,
                 reason="Tarife altı ücret teklifi / kural ihlali",
                 issued_by="SYSTEM_TARIFF_RULE"
@@ -246,10 +264,10 @@ async def handle_reason_selected(callback: CallbackQuery, db: AsyncSession):
 
         await db.commit()
 
-        # Banlanan adaya sert bildirim gönder
+        # Banlanan tarafa sert bildirim gönder
         try:
             await callback.bot.send_message(
-                chat_id=session.applicant_id,
+                chat_id=violator_id,
                 text=(
                     f"🚨 <b>DİREKT SİSTEMDEN UZAKLAŞTIRILDINIZ (TARİFE ALTI TEKLİF)</b>\n\n"
                     f"#{listing_id} numaralı tevkil görüşmesinde <b>Baro Asgari Ücret Tarifesi / Grup Tarifesi Altında</b> "
@@ -263,12 +281,12 @@ async def handle_reason_selected(callback: CallbackQuery, db: AsyncSession):
                 parse_mode="HTML"
             )
         except Exception as e:
-            print(f"[Confirmation] Tarife ban bildirimi adaya iletilemedi: {e}")
+            print(f"[Confirmation] Tarife ban bildirimi iletilemedi: {e}")
 
-        # İlan sahibine bildirim
+        # Bildiren tarafa onay
         await callback.message.edit_text(
             f"🚨 <b>Tarife İhlali Kaydedildi ve Yaptırım Uygulandı</b>\n\n"
-            f"Tarife altı teklif bildirimi nedeniyle ilgili aday <b>{ban_days} gün süreyle doğrudan banlanmış</b> "
+            f"Tarife altı teklif bildirimi nedeniyle karşı taraf <b>{ban_days} gün süreyle doğrudan banlanmış</b> "
             f"ve durum Admin Denetim Grubu'na yüksek öncelikle iletilmiştir.",
             parse_mode="HTML"
         )
@@ -277,8 +295,8 @@ async def handle_reason_selected(callback: CallbackQuery, db: AsyncSession):
         admin_alert = (
             f"🚨🚨 <b>[TARİFE ALTI ÜCRET İHLALİ — DİREKT BAN UYGULANDI]</b>\n"
             f"📋 <b>İlan ID:</b> #{listing_id}\n"
-            f"👤 <b>Şikayet Eden (İlan Sahibi):</b> <code>{session.creator_id}</code>\n"
-            f"👤 <b>Yasaklanan Aday:</b> <code>{session.applicant_id}</code> ({current_candidate_rank}. Sıra)\n"
+            f"👤 <b>Şikayet Eden ({reporter_title}):</b> <code>{reporter_id}</code>\n"
+            f"👤 <b>Yasaklanan ({violator_title}):</b> <code>{violator_id}</code>\n"
             f"⚖️ <b>Uygulanan Ceza:</b> {ban_days} Gün Direkt Ban & +30 Ceza Puanı\n"
             f"⏰ <b>Bitiş Tarihi:</b> {format_date_short_tr(ban_until)}\n\n"
             f"<i>Yöneticilerimiz sohbet arşivini yukarıdaki loglardan denetleyebilir.</i>"
@@ -293,13 +311,14 @@ async def handle_reason_selected(callback: CallbackQuery, db: AsyncSession):
             parse_mode="HTML"
         )
 
-        # Adaya bilgi ver
+        # Karşı tarafa bilgi ver
+        partner_id = session.applicant_id if callback.from_user.id == session.creator_id else session.creator_id
         try:
             await callback.bot.send_message(
-                chat_id=session.applicant_id,
+                chat_id=partner_id,
                 text=(
                     f"ℹ️ <b>Görüşme Sonlandırıldı</b>\n\n"
-                    f"#{listing_id} numaralı tevkil ilanı için görüşme anlaşma sağlanamadan kapatılmıştır."
+                    f"#{listing_id} numaralı tevkil ilanı için görüşme meslektaşınız tarafından ({reason_text}) gerekçesiyle kapatılmıştır."
                 ),
                 parse_mode="HTML"
             )
@@ -311,10 +330,10 @@ async def handle_reason_selected(callback: CallbackQuery, db: AsyncSession):
             f"⚠️ <b>[ANLAŞMAZLIK DEĞERLENDİRMESİ — İlan #{listing_id}]</b>\n"
             f"👤 <b>İlan Sahibi:</b> <code>{session.creator_id}</code>\n"
             f"👤 <b>Başvuran ({current_candidate_rank}. Sıra Aday):</b> <code>{session.applicant_id}</code>\n"
-            f"📌 <b>Gerekçe:</b> {reason_text}\n\n"
+            f"📌 <b>Bildiren:</b> {reporter_title} | <b>Gerekçe:</b> {reason_text}\n\n"
             f"🛠️ <b>Admin Müdahalesi:</b>\n"
-            f"• Kısıtla: <code>/kullanici_kisitla {session.applicant_id} 5</code>\n"
-            f"• Ceza Puanı: <code>/ceza_puani_ver {session.applicant_id} 10 Anlaşmazlık ihlali</code>"
+            f"• Kısıtla: <code>/kullanici_kisitla {violator_id} 5</code>\n"
+            f"• Ceza Puanı: <code>/ceza_puani_ver {violator_id} 10 Anlaşmazlık ihlali</code>"
         )
         await AuditService.notify_admin_event(callback.bot, admin_alert)
 
