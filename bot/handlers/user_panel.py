@@ -224,6 +224,17 @@ async def cmd_help(message: Message):
     await message.reply(text, parse_mode="HTML")
 
 
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.context import FSMContext
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
+
+
+class BaroVerifyStates(StatesGroup):
+    waiting_for_baro = State()
+    waiting_for_sicil = State()
+    waiting_for_document = State()
+
+
 @router.message(Command("profilim", "durum"), F.chat.type == "private")
 async def cmd_profile(message: Message, db: AsyncSession):
     sender = message.from_user
@@ -239,16 +250,28 @@ async def cmd_profile(message: Message, db: AsyncSession):
     avg_score = await RankService.get_system_average_score(db)
     handicap = RankService.determine_handicap_level(net_score, avg_score, user.penalty_points)
 
-    baro_status = f"✅ {user.baro_name} ({user.baro_sicil_no})" if user.is_baro_verified else "❌ Doğrulanmadı (/baro_kaydet)"
+    if user.is_baro_verified:
+        baro_status = f"🎖️ <b>ONAYLI AVUKAT</b> ({user.baro_name} Barosu - Sicil: {user.baro_sicil_no})"
+        baro_btn_text = "🔄 Baro Bilgilerimi Güncelle"
+    elif user.baro_verification_status == "PENDING":
+        baro_status = f"⏳ <b>ONAY BEKLİYOR</b> ({user.baro_name or 'Belirtilmedi'} - Sicil: {user.baro_sicil_no or 'Yok'})"
+        baro_btn_text = "⏳ Doğrulama İnceleniyor"
+    elif user.baro_verification_status == "REJECTED":
+        baro_status = f"❌ <b>REDDEDİLDİ</b> (Yeniden başvuru için /baro_dogrula)"
+        baro_btn_text = "🎖️ Yeniden Baro Doğrula"
+    else:
+        baro_status = "❌ <b>Doğrulanmadı</b> (/baro_dogrula)"
+        baro_btn_text = "🎖️ Baro Kaydımı Doğrula (+10 Puan)"
+
     ban_status = f"⛔ <b>Kısıtlı:</b> {format_date_short_tr(user.banned_until)} tarihine kadar ({user.ban_reason})" if user.is_banned else "✅ <b>Aktif (Kısıtlama Yok)</b>"
 
     text = (
-        f"👤 <b>KULLANICI PROFİL VE RANK RAPORU</b>\n\n"
+        f"👤 <b>KULLANICI PROFİL VE GÜVEN RAPORU</b>\n\n"
         f"• <b>Ad Soyad:</b> {user.full_name}\n"
         f"• <b>Telegram ID:</b> <code>{user.id}</code>\n"
-        f"• <b>Baro Doğrulama:</b> {baro_status}\n"
-        f"• <b>Durum:</b> {ban_status}\n\n"
-        f"⭐ <b>Rank Puanı Bilgileri:</b>\n"
+        f"• <b>Baro Durumu:</b> {baro_status}\n"
+        f"• <b>Hesap Durumu:</b> {ban_status}\n\n"
+        f"⭐ <b>Rank & Güven Puanı:</b>\n"
         f"• <b>Kazanılan Puan:</b> {user.rank_score}\n"
         f"• <b>Ceza Puanı:</b> {user.penalty_points}\n"
         f"• <b>Efektif Net Puan:</b> ⭐ <b>{net_score}</b> (Sistem Ortalaması: {avg_score:.1f})\n"
@@ -257,7 +280,183 @@ async def cmd_profile(message: Message, db: AsyncSession):
         f"• Tamamlanan Başarılı Tevkil: <b>{user.completed_tevkils_count}</b>\n"
         f"• İptal Edilen / Zaman Aşımı: <b>{user.cancelled_tevkils_count}</b>"
     )
-    await message.reply(text, parse_mode="HTML")
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=baro_btn_text, callback_data="user_act:start_baro_verify")]
+    ])
+    await message.reply(text, reply_markup=kb, parse_mode="HTML")
+
+
+@router.callback_query(F.data == "user_act:start_baro_verify")
+async def handle_callback_baro_verify(callback: CallbackQuery, state: FSMContext, db: AsyncSession):
+    await callback.answer()
+    await state.set_state(BaroVerifyStates.waiting_for_baro)
+    kb = BaroVerificationService.get_baro_selection_keyboard()
+    await callback.message.reply(
+        "🏛️ <b>AVUKATLIK / BARO LEVHA DOĞRULAMA SİSTEMİ</b>\n\n"
+        "Lütfen kayıtlı olduğunuz baroyu aşağıdaki butonlardan seçiniz veya "
+        "<b>[✍️ Diğer Baroyu Kendim Yazacağım]</b> seçeneğine tıklayınız:\n\n"
+        "<i>(Doğrulanmış meslektaşlarımıza 🎖️ 'Baro Onaylı Avukat' rozeti ve +10 Güven Puanı verilir.)</i>",
+        reply_markup=kb,
+        parse_mode="HTML"
+    )
+
+
+@router.message(Command("baro_dogrula", "baro_kaydet", "baro", "avukatlik_dogrula"), F.chat.type == "private")
+async def cmd_baro_verify(message: Message, state: FSMContext, db: AsyncSession):
+    parts = message.text.split(maxsplit=2)
+    if len(parts) >= 3:
+        # Hızlı argümanlı kayıt: /baro_kaydet İstanbul 12345
+        baro_name = parts[1]
+        sicil_no = parts[2]
+        res = await BaroVerificationService.submit_verification_request(
+            bot=message.bot,
+            user_id=message.from_user.id,
+            baro_name=baro_name,
+            sicil_no=sicil_no,
+            db=db
+        )
+        await message.reply(res["message"], parse_mode="HTML")
+        return
+
+    # İnteraktif Sihirbazı Başlat
+    await state.set_state(BaroVerifyStates.waiting_for_baro)
+    kb = BaroVerificationService.get_baro_selection_keyboard()
+    await message.reply(
+        "🏛️ <b>AVUKATLIK / BARO LEVHA DOĞRULAMA SİSTEMİ</b>\n\n"
+        "Lütfen kayıtlı olduğunuz baroyu aşağıdaki butonlardan seçiniz:\n\n"
+        "<i>(Doğrulanan meslektaşlarımıza profilinde 🎖️ 'Baro Onaylı Avukat' rozeti ve +10 Güven Puanı verilir.)</i>",
+        reply_markup=kb,
+        parse_mode="HTML"
+    )
+
+
+@router.callback_query(F.data.startswith("baro_sel:"))
+async def handle_baro_selection_callback(callback: CallbackQuery, state: FSMContext):
+    selected = callback.data.split(":", 1)[1]
+    if selected == "CANCEL":
+        await state.clear()
+        await callback.answer("İşlem iptal edildi.")
+        try:
+            await callback.message.edit_text("❌ Baro doğrulama işlemi iptal edildi.")
+        except Exception:
+            pass
+        return
+
+    if selected == "OTHER":
+        await callback.answer()
+        await callback.message.reply(
+            "✍️ Lütfen bağlı olduğunuz baro adını yazınız:\n"
+            "<i>(Örn: Çanakkale, Trabzon, Şanlıurfa, Denizli, Diyarbakır vb.)</i>",
+            parse_mode="HTML"
+        )
+        await state.set_state(BaroVerifyStates.waiting_for_baro)
+        return
+
+    # Popüler butonlardan seçildi
+    await callback.answer()
+    norm_baro = BaroVerificationService.normalize_baro_name(selected) or selected
+    await state.update_data(baro_name=norm_baro)
+    await state.set_state(BaroVerifyStates.waiting_for_sicil)
+
+    await callback.message.reply(
+        f"🏛️ <b>Seçilen Baro:</b> {norm_baro} Barosu\n\n"
+        f"Lütfen <b>Baro Sicil Numaranızı</b> yazınız:\n"
+        f"<i>(Örn: <code>12345</code>)</i>",
+        parse_mode="HTML"
+    )
+
+
+@router.message(BaroVerifyStates.waiting_for_baro, F.chat.type == "private")
+async def handle_baro_text_input(message: Message, state: FSMContext):
+    raw_text = (message.text or "").strip()
+    norm_baro = BaroVerificationService.normalize_baro_name(raw_text) or raw_text
+
+    await state.update_data(baro_name=norm_baro)
+    await state.set_state(BaroVerifyStates.waiting_for_sicil)
+
+    await message.reply(
+        f"🏛️ <b>Kayıtlı Baro:</b> {norm_baro} Barosu\n\n"
+        f"Lütfen <b>Baro Sicil Numaranızı</b> yazınız:\n"
+        f"<i>(Örn: <code>12345</code>)</i>",
+        parse_mode="HTML"
+    )
+
+
+@router.message(BaroVerifyStates.waiting_for_sicil, F.chat.type == "private")
+async def handle_sicil_input(message: Message, state: FSMContext):
+    sicil_raw = (message.text or "").strip()
+    if not BaroVerificationService.validate_sicil_format(sicil_raw):
+        await message.reply(
+            "⚠️ <b>Geçersiz Sicil Formatı:</b> Sicil numarası sadece 3 ila 7 basamaklı rakamlardan oluşmalıdır.\n"
+            "Lütfen tekrar deneyiniz (Örn: <code>12345</code>):",
+            parse_mode="HTML"
+        )
+        return
+
+    await state.update_data(sicil_no=sicil_raw)
+    await state.set_state(BaroVerifyStates.waiting_for_document)
+
+    skip_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⏭️ Belgesiz Gönder (Sadece Beyan)", callback_data="baro_skip_doc")]
+    ])
+
+    await message.reply(
+        f"📄 <b>Son Adım: Avukatlık Belgesi / Kimlik Fotoğrafı (İsteğe Bağlı)</b>\n\n"
+        f"• <b>Baro:</b> {(await state.get_data()).get('baro_name')} Barosu\n"
+        f"• <b>Sicil No:</b> {sicil_raw}\n\n"
+        f"Doğrulama sürecinizi hızlandırmak ve anında <b>🎖️ Onaylı Avukat Rozeti</b> almak için "
+        f"lütfen <b>Baro Kimlik Kartınızın</b> veya <b>E-Devlet Barkodlu Avukatlık Belgenizin</b> fotoğrafını ya da PDF dosyasını buraya gönderiniz.\n\n"
+        f"<i>(Belge göndermek istemiyorsanız aşağıdaki 'Belgesiz Gönder' butonuna basabilirsiniz.)</i>",
+        reply_markup=skip_kb,
+        parse_mode="HTML"
+    )
+
+
+@router.callback_query(F.data == "baro_skip_doc")
+async def handle_baro_skip_document(callback: CallbackQuery, state: FSMContext, db: AsyncSession):
+    await callback.answer()
+    data = await state.get_data()
+    baro_name = data.get("baro_name", "İstanbul")
+    sicil_no = data.get("sicil_no", "12345")
+    await state.clear()
+
+    res = await BaroVerificationService.submit_verification_request(
+        bot=callback.bot,
+        user_id=callback.from_user.id,
+        baro_name=baro_name,
+        sicil_no=sicil_no,
+        document_file_id=None,
+        db=db
+    )
+    try:
+        await callback.message.edit_text(res["message"], parse_mode="HTML")
+    except Exception:
+        await callback.message.reply(res["message"], parse_mode="HTML")
+
+
+@router.message(BaroVerifyStates.waiting_for_document, F.chat.type == "private")
+async def handle_baro_document_upload(message: Message, state: FSMContext, db: AsyncSession):
+    file_id = None
+    if message.photo:
+        file_id = message.photo[-1].file_id
+    elif message.document:
+        file_id = message.document.file_id
+
+    data = await state.get_data()
+    baro_name = data.get("baro_name", "İstanbul")
+    sicil_no = data.get("sicil_no", "12345")
+    await state.clear()
+
+    res = await BaroVerificationService.submit_verification_request(
+        bot=message.bot,
+        user_id=message.from_user.id,
+        baro_name=baro_name,
+        sicil_no=sicil_no,
+        document_file_id=file_id,
+        db=db
+    )
+    await message.reply(res["message"], parse_mode="HTML")
 
 
 @router.message(Command("ilanlarim"), F.chat.type == "private")
@@ -309,26 +508,3 @@ async def cmd_my_applications(message: Message, db: AsyncSession):
             f"  Puan: ⭐ {a.user_rank_score} | Tarih: {format_date_short_tr(a.applied_at)}\n"
         )
     await message.reply("\n".join(lines), parse_mode="HTML")
-
-
-@router.message(Command("baro_kaydet"), F.chat.type == "private")
-async def cmd_baro_verify(message: Message, db: AsyncSession):
-    parts = message.text.split(maxsplit=2)
-    if len(parts) < 3:
-        await message.reply(
-            "⚠️ Kullanım: <code>/baro_kaydet &lt;Baro_Adı&gt; &lt;Sicil_No&gt;</code>\n"
-            "<i>Örnek: /baro_kaydet İstanbul 12345</i>",
-            parse_mode="HTML"
-        )
-        return
-
-    baro_name = parts[1]
-    sicil_no = parts[2]
-
-    res = await BaroVerificationService.verify_lawyer_credentials(
-        user_id=message.from_user.id,
-        baro_name=baro_name,
-        sicil_no=sicil_no,
-        db=db
-    )
-    await message.reply(res["message"])

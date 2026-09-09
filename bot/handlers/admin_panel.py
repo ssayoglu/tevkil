@@ -458,6 +458,62 @@ async def cmd_unban_user(message: Message, db: AsyncSession):
     await message.reply(f"🔓 <code>{user_id}</code> ID'li kullanıcının cezası kaldırıldı.", parse_mode="HTML")
 
 
+@router.message(Command("baro_onayla", prefix="/!"))
+async def cmd_approve_baro(message: Message, db: AsyncSession):
+    if not is_admin_chat(message):
+        return
+
+    parts = message.text.split()
+    if len(parts) < 2:
+        await message.reply("⚠️ Kullanım: <code>/baro_onayla &lt;user_id&gt;</code>", parse_mode="HTML")
+        return
+
+    try:
+        user_id = int(parts[1])
+    except ValueError:
+        await message.reply("❌ Geçersiz kullanıcı ID.")
+        return
+
+    from bot.services.baro_service import BaroVerificationService
+    admin_name = message.from_user.full_name or f"Admin {message.from_user.id}"
+    res = await BaroVerificationService.approve_verification(
+        bot=message.bot,
+        user_id=user_id,
+        admin_name=admin_name,
+        db=db
+    )
+    await message.reply(res["message"], parse_mode="HTML")
+
+
+@router.message(Command("baro_reddet", prefix="/!"))
+async def cmd_reject_baro(message: Message, db: AsyncSession):
+    if not is_admin_chat(message):
+        return
+
+    parts = message.text.split(maxsplit=2)
+    if len(parts) < 2:
+        await message.reply("⚠️ Kullanım: <code>/baro_reddet &lt;user_id&gt; [sebep]</code>", parse_mode="HTML")
+        return
+
+    try:
+        user_id = int(parts[1])
+    except ValueError:
+        await message.reply("❌ Geçersiz kullanıcı ID.")
+        return
+
+    reason = parts[2] if len(parts) >= 3 else "diger"
+    from bot.services.baro_service import BaroVerificationService
+    admin_name = message.from_user.full_name or f"Admin {message.from_user.id}"
+    res = await BaroVerificationService.reject_verification(
+        bot=message.bot,
+        user_id=user_id,
+        reason_code=reason,
+        admin_name=admin_name,
+        db=db
+    )
+    await message.reply(res["message"], parse_mode="HTML")
+
+
 @router.message(Command("ceza_puani_ver"))
 async def cmd_add_penalty_points(message: Message, db: AsyncSession):
     if not is_admin_chat(message):
@@ -865,6 +921,40 @@ async def handle_admin_action_callback(callback: CallbackQuery, db: AsyncSession
         listing_id = target_uid
         queue_text = await get_listing_queue_text(listing_id, db)
         await callback.message.reply(queue_text, parse_mode="HTML")
+        return
+
+    elif action == "approve_baro":
+        from bot.services.baro_service import BaroVerificationService
+        admin_name = callback.from_user.full_name or f"Admin {callback.from_user.id}"
+        res = await BaroVerificationService.approve_verification(
+            bot=callback.bot,
+            user_id=target_uid,
+            admin_name=admin_name,
+            db=db
+        )
+        await callback.answer(res["message"], show_alert=True)
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        return
+
+    elif action == "reject_baro":
+        from bot.services.baro_service import BaroVerificationService
+        reason_code = parts[3] if len(parts) >= 4 else "diger"
+        admin_name = callback.from_user.full_name or f"Admin {callback.from_user.id}"
+        res = await BaroVerificationService.reject_verification(
+            bot=callback.bot,
+            user_id=target_uid,
+            reason_code=reason_code,
+            admin_name=admin_name,
+            db=db
+        )
+        await callback.answer(res["message"], show_alert=True)
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
         return
 
     u_stmt = select(User).where(User.id == target_uid)

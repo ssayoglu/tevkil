@@ -29,7 +29,11 @@ class User(Base):
     # Baro Levha Doğrulama
     baro_name: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     baro_sicil_no: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    tbb_sicil_no: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
     is_baro_verified: Mapped[bool] = mapped_column(Boolean, default=False)
+    baro_verified_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    baro_verification_status: Mapped[str] = mapped_column(String(32), default="NONE")  # NONE, PENDING, VERIFIED, REJECTED
+    baro_document_file_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
 
     listings: Mapped[List["Listing"]] = relationship("Listing", back_populates="creator")
     applications: Mapped[List["Application"]] = relationship("Application", back_populates="user")

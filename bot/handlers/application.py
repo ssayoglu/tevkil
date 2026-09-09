@@ -78,7 +78,8 @@ async def update_group_listing_board(bot, listing: Listing, db: AsyncSession = N
             status_tag = f"⏳ <i>{rank}. Sırada (Yedek)</i>"
 
         handicap_tag = f" (⚠️ -{handicap_lvl} Sıra)" if handicap_lvl > 0 else ""
-        lines.append(f"<b>{rank}.</b> {full_name} — ⭐ {rank_score} P.{handicap_tag} — <code>{time_str}</code> [{status_tag}]")
+        baro_badge = " 🎖️" if app.get("is_baro_verified") else ""
+        lines.append(f"<b>{rank}.</b> {full_name}{baro_badge} — ⭐ {rank_score} P.{handicap_tag} — <code>{time_str}</code> [{status_tag}]")
 
     board_content = "\n".join(lines)
     
