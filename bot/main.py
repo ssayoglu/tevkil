@@ -10,6 +10,7 @@ from bot.services.redis_queue import redis_client
 from bot.services.timeout_service import TimeoutService
 from bot.middlewares.db_session import DbSessionMiddleware
 from bot.middlewares.blacklist_check import BlacklistMiddleware
+from bot.middlewares.baro_check import BaroVerificationMiddleware
 from bot.handlers import (
     admin_panel,
     user_panel,
@@ -52,6 +53,7 @@ async def main():
     dp.update.outer_middleware(DbSessionMiddleware())
     dp.message.outer_middleware(BlacklistMiddleware())
     dp.callback_query.outer_middleware(BlacklistMiddleware())
+    dp.message.outer_middleware(BaroVerificationMiddleware())
 
     # Routers Kaydı
     dp.include_router(admin_panel.router)
@@ -69,7 +71,10 @@ async def main():
     try:
         # Eski bekleyen güncellemeleri temizle ve polling başlat
         await bot.delete_webhook(drop_pending_updates=True)
-        await dp.start_polling(bot)
+        await dp.start_polling(
+            bot,
+            allowed_updates=["message", "edited_message", "callback_query", "chat_member", "my_chat_member"]
+        )
     finally:
         timeout_task.cancel()
         await bot.session.close()

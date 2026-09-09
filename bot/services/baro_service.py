@@ -239,6 +239,7 @@ class BaroVerificationService:
                     f"🎉 <b>Tebrikler Sayın Av. {user.full_name}!</b>\n\n"
                     f"🏛️ <b>{user.baro_name} Barosu ({user.baro_sicil_no})</b> levha kaydınız yöneticilerimiz tarafından başarıyla doğrulanmıştır.\n\n"
                     f"🎖️ <b>Kazanılan Haklar ve Rozetler:</b>\n"
+                    f"• <b>Grupta Mesaj Gönderme İzniniz Açıldı ✅</b>\n"
                     f"• Profilinize <b>'Baro Onaylı Avukat'</b> rozeti eklendi.\n"
                     f"• Hesabınıza <b>+10 Güven / Rank Puanı</b> tanımlandı.\n"
                     f"• Tevkil panolarında başvurularınız artık <b>onaylı meslektaş</b> olarak öncelikli görünecektir.\n\n"
@@ -248,6 +249,31 @@ class BaroVerificationService:
             )
         except Exception as e:
             print(f"[BaroService] Kullanıcıya onay DM'si gönderilemedi: {e}")
+
+        # Gruplardaki mesaj kısıtlamasını kaldır
+        try:
+            from bot.database.models import Listing
+            from aiogram.types import ChatPermissions
+            grp_stmt = select(Listing.group_id).where(Listing.group_id.isnot(None)).distinct()
+            res_grp = await db.execute(grp_stmt)
+            for row in res_grp.fetchall():
+                gid = row[0]
+                if gid and gid != settings.admin_chat_id:
+                    try:
+                        await bot.restrict_chat_member(
+                            chat_id=gid,
+                            user_id=user_id,
+                            permissions=ChatPermissions(
+                                can_send_messages=True,
+                                can_send_media_messages=True,
+                                can_send_other_messages=True,
+                                can_add_web_page_previews=True
+                            )
+                        )
+                    except Exception:
+                        pass
+        except Exception:
+            pass
 
         return {
             "success": True,
