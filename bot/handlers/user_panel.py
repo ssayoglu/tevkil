@@ -609,14 +609,31 @@ async def cmd_my_listings(message: Message, db: AsyncSession):
         await message.reply("Henüz yayınlanmış bir tevkil ilanınız bulunmamaktadır.")
         return
 
+    bot_info = await message.bot.get_me()
+    bot_username = bot_info.username or "Tevkil_Denetim_Merkezi_bot"
+
     lines = ["📋 <b>Son Tevkil İlanlarınız:</b>\n"]
+    buttons = []
+
     for l in listings:
+        a_stmt = select(func.count(Application.id)).where(Application.listing_id == l.id)
+        a_count = (await db.execute(a_stmt)).scalar() or 0
+
+        status_info = f"<code>{l.status}</code>"
+        if a_count > 0 and l.status in ["OPEN", "MATCHED"]:
+            status_info += f" ({a_count} Başvuru) 🟢"
+            buttons.append([InlineKeyboardButton(text=f"💬 Görevlendirmeye Git (#{l.id})", url=f"https://t.me/{bot_username}?start=chat_{l.id}")])
+        elif l.status in ["OPEN", "MATCHED"]:
+            status_info += " (Başvuru Yok)"
+
         lines.append(
-            f"• <b>İlan #{l.id}</b> | Durum: <code>{l.status}</code>\n"
+            f"• <b>İlan #{l.id}</b> | Durum: {status_info}\n"
             f"  Tarih: {format_date_short_tr(l.created_at)}\n"
             f"  İçerik: <i>{l.raw_text[:80]}...</i>\n"
         )
-    await message.reply("\n".join(lines), parse_mode="HTML")
+
+    kb = InlineKeyboardMarkup(inline_keyboard=buttons) if buttons else None
+    await message.reply("\n".join(lines), reply_markup=kb, parse_mode="HTML")
 
 
 @router.message(Command("basvurularim"), F.chat.type == "private")
@@ -659,21 +676,37 @@ async def handle_callback_my_listings(callback: CallbackQuery, db: AsyncSession)
 
     if not listings:
         msg = "ℹ️ Henüz yayınlanmış bir tevkil ilanınız bulunmamaktadır."
+        kb = None
     else:
+        bot_info = await callback.bot.get_me()
+        bot_username = bot_info.username or "Tevkil_Denetim_Merkezi_bot"
         lines = ["📋 <b>Son Tevkil İlanlarınız:</b>\n"]
+        buttons = []
+
         for l in listings:
+            a_stmt = select(func.count(Application.id)).where(Application.listing_id == l.id)
+            a_count = (await db.execute(a_stmt)).scalar() or 0
+
+            status_info = f"<code>{l.status}</code>"
+            if a_count > 0 and l.status in ["OPEN", "MATCHED"]:
+                status_info += f" ({a_count} Başvuru) 🟢"
+                buttons.append([InlineKeyboardButton(text=f"💬 Görevlendirmeye Git (#{l.id})", url=f"https://t.me/{bot_username}?start=chat_{l.id}")])
+            elif l.status in ["OPEN", "MATCHED"]:
+                status_info += " (Başvuru Yok)"
+
             lines.append(
-                f"• <b>İlan #{l.id}</b> | Durum: <code>{l.status}</code>\n"
+                f"• <b>İlan #{l.id}</b> | Durum: {status_info}\n"
                 f"  Tarih: {format_date_short_tr(l.created_at)}\n"
                 f"  İçerik: <i>{l.raw_text[:80]}...</i>\n"
             )
         msg = "\n".join(lines)
+        kb = InlineKeyboardMarkup(inline_keyboard=buttons) if buttons else None
 
     try:
-        await callback.message.reply(msg, parse_mode="HTML")
+        await callback.message.reply(msg, reply_markup=kb, parse_mode="HTML")
     except Exception:
         try:
-            await callback.bot.send_message(chat_id=callback.from_user.id, text=msg, parse_mode="HTML")
+            await callback.bot.send_message(chat_id=callback.from_user.id, text=msg, reply_markup=kb, parse_mode="HTML")
         except Exception:
             pass
 

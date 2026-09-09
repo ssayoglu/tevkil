@@ -142,9 +142,43 @@ async def handle_application(callback: CallbackQuery, db: AsyncSession):
         await callback.answer("⚠️ Bu ilan tamamlanmış veya iptal edilmiştir.", show_alert=True)
         return
 
-    # İlan sahibinin kendi ilanına başvurmasını engelle
+    # İlan sahibinin kendi ilanına başvurmasını engelle / başvuru varsa görevlendirmeye yönlendir
     if listing.creator_id == user.id:
-        await callback.answer("⚠️ Kendi tevkil ilanınıza başvuramazsınız.", show_alert=True)
+        from bot.services.bridge_service import get_confirmation_keyboard
+        from bot.database.models import BridgeSession
+
+        app_stmt = select(Application).where(Application.listing_id == listing_id)
+        app_res = await db.execute(app_stmt)
+        apps = app_res.scalars().all()
+
+        s_stmt = select(BridgeSession).where(BridgeSession.listing_id == listing_id, BridgeSession.is_active == True)
+        s_res = await db.execute(s_stmt)
+        active_sess = s_res.scalar_one_or_none()
+
+        bot_info = await callback.bot.get_me()
+        bot_username = bot_info.username or "Tevkil_Denetim_Merkezi_bot"
+        chat_url = f"https://t.me/{bot_username}?start=chat_{listing_id}"
+
+        if apps or active_sess:
+            await callback.answer("🔗 İlanınıza başvuru bulunmaktadır! Bot DM üzerinden görevlendirme/görüşme paneli açıldı.", show_alert=True)
+            try:
+                candidate_text = f"{active_sess.candidate_rank}. Sıradaki Başvuran Aday" if active_sess else "Başvuran Aday"
+                await callback.bot.send_message(
+                    chat_id=user.id,
+                    text=(
+                        f"🔗 <b>Tevkil Görevlendirme & Görüşme Paneli (İlan #{listing_id})</b>\n\n"
+                        f"👤 <b>Görüştüğünüz Kişi:</b> {candidate_text}\n"
+                        f"👥 <b>Toplam Başvuru:</b> {len(apps)} Meslektaşımız\n\n"
+                        f"💬 Bu sohbete yazacağınız tüm mesajlar karşı tarafa <b>anonim olarak iletilir</b>.\n"
+                        f"Görüşme sonucunda anlaşma durumunu aşağıdaki butonlarla teyit edebilirsiniz:"
+                    ),
+                    reply_markup=get_confirmation_keyboard(listing_id),
+                    parse_mode="HTML"
+                )
+            except Exception:
+                pass
+        else:
+            await callback.answer("ℹ️ Bu sizin açtığınız ilandır. Henüz bir başvuru yapılmamıştır.", show_alert=True)
         return
 
     # 2. Kullanıcıyı DB'ye kaydet/güncelle
