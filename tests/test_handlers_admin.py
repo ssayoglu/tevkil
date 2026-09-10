@@ -161,3 +161,23 @@ async def test_cmd_reset_baro():
     reply_text = message.reply.call_args[0][0]
     assert "BARO DOĞRULAMALARI SIFIRLANDI" in reply_text
 
+
+@pytest.mark.asyncio
+async def test_unrestrict_all_group_members():
+    from bot.handlers.admin_panel import unrestrict_all_group_members
+
+    mock_bot = AsyncMock()
+    mock_db = AsyncMock()
+
+    res_grp = MagicMock()
+    res_grp.fetchall.return_value = [(-1004451880964,)]
+
+    res_u = MagicMock()
+    res_u.fetchall.return_value = [(123456,), (789012,)]
+
+    mock_db.execute.side_effect = [res_grp, res_u]
+
+    await unrestrict_all_group_members(mock_bot, mock_db)
+    assert mock_bot.restrict_chat_member.called
+    assert mock_bot.restrict_chat_member.call_count == 2
+

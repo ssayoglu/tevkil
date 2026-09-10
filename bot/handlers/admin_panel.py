@@ -39,8 +39,52 @@ def get_admin_main_keyboard() -> InlineKeyboardMarkup:
     ])
 
 
-async def reset_baro_verifications(db: AsyncSession, user_id: int = 0) -> int:
+async def unrestrict_all_group_members(bot, db: AsyncSession):
+    """Test sıfırlaması yapıldığında tüm grup üyelerinin Telegram kısıtlamalarını kaldırır."""
+    if not bot:
+        return
+    from aiogram.types import ChatPermissions
+    try:
+        grp_stmt = select(Listing.group_id).where(Listing.group_id.isnot(None)).distinct()
+        res_grp = await db.execute(grp_stmt)
+        group_ids = {row[0] for row in res_grp.fetchall() if row[0] and row[0] != settings.admin_chat_id}
+
+        known = await RedisQueueService.get_known_groups()
+        group_ids.update(known)
+
+        u_stmt = select(User.id)
+        res_u = await db.execute(u_stmt)
+        user_ids = [row[0] for row in res_u.fetchall()]
+
+        perms = ChatPermissions(
+            can_send_messages=True,
+            can_send_audios=True,
+            can_send_documents=True,
+            can_send_photos=True,
+            can_send_videos=True,
+            can_send_video_notes=True,
+            can_send_voice_notes=True,
+            can_send_polls=True,
+            can_send_other_messages=True,
+            can_add_web_page_previews=True,
+            can_send_media_messages=True
+        )
+
+        for gid in group_ids:
+            for uid in user_ids:
+                try:
+                    await bot.restrict_chat_member(chat_id=gid, user_id=uid, permissions=perms)
+                except Exception:
+                    pass
+    except Exception as e:
+        print(f"[AdminPanel] Grup kısıt sıfırlama hatası: {e}")
+
+
+async def reset_baro_verifications(db: AsyncSession, user_id: int = 0, bot=None) -> int:
     """Kullanıcıların veya belirli bir kullanıcının Baro doğrulamasını sıfırlar (Test için)."""
+    if bot:
+        await unrestrict_all_group_members(bot, db)
+
     if user_id > 0:
         stmt = update(User).where(User.id == user_id).values(
             is_baro_verified=False,
@@ -71,8 +115,10 @@ async def reset_baro_verifications(db: AsyncSession, user_id: int = 0) -> int:
         return verified_count
 
 
-async def reset_all_test_restrictions(db: AsyncSession, reset_baro: bool = False) -> dict:
+async def reset_all_test_restrictions(db: AsyncSession, reset_baro: bool = False, bot=None) -> dict:
     """Test süresince tüm kullanıcı yasaklarını, ceza puanlarını ve aktif köprü oturumlarını sıfırlar."""
+    if bot:
+        await unrestrict_all_group_members(bot, db)
     banned_count = (await db.execute(select(func.count(User.id)).where(User.is_banned == True))).scalar() or 0
     penalized_count = (await db.execute(select(func.count(User.id)).where(User.penalty_points > 0))).scalar() or 0
     active_sessions_count = (await db.execute(select(func.count(BridgeSession.id)).where(BridgeSession.is_active == True))).scalar() or 0
@@ -274,7 +320,7 @@ async def cmd_reset_all_test_restrictions(message: Message, db: AsyncSession):
     if not is_admin_chat(message):
         return
 
-    res = await reset_all_test_restrictions(db, reset_baro=False)
+    res = await reset_all_test_restrictions(db, reset_baro=False, bot=message.bot)
     summary = (
         "🧹 <b>TEST MODU: TÜM KISITLAR VE OTURUMLAR SIFIRLANDI</b>\n\n"
         f"• <b>Yasağı Kaldırılan Kullanıcı:</b> {res['banned_count']}\n"
@@ -295,7 +341,7 @@ async def cmd_reset_baro(message: Message, db: AsyncSession):
     parts = message.text.split()
     target_uid = int(parts[1]) if len(parts) >= 2 and parts[1].isdigit() else 0
 
-    count = await reset_baro_verifications(db, user_id=target_uid)
+    count = await reset_baro_verifications(db, user_id=target_uid, bot=message.bot)
     if target_uid > 0:
         summary = (
             f"🔄 <b>TEST MODU: KULLANICI BARO DOĞRULAMASI SIFIRLANDI</b>\n\n"
@@ -931,7 +977,7 @@ async def handle_admin_action_callback(callback: CallbackQuery, db: AsyncSession
     val = int(parts[3]) if len(parts) >= 4 and parts[3].isdigit() else 0
 
     if action == "reset_baro":
-        count = await reset_baro_verifications(db)
+        count = await reset_baro_verifications(db, bot=callback.bot)
         summary = (
             f"🔄 <b>TEST MODU: TÜM KATILANLAR VE BARO DOĞRULAMALARI SIFIRLANDI</b>\n\n"
             f"• <b>Sıfırlanan Doğrulama Sayısı:</b> {count} Kullanıcı\n"
@@ -946,7 +992,7 @@ async def handle_admin_action_callback(callback: CallbackQuery, db: AsyncSession
         return
 
     elif action == "reset_restrictions":
-        res = await reset_all_test_restrictions(db, reset_baro=False)
+        res = await reset_all_test_restrictions(db, reset_baro=False, bot=callback.bot)
         summary = (
             "🧹 <b>TEST MODU: KISITLAR VE BANLAR SIFIRLANDI</b>\n\n"
             f"• <b>Yasağı Kaldırılan Kullanıcı:</b> {res['banned_count']}\n"
@@ -963,7 +1009,7 @@ async def handle_admin_action_callback(callback: CallbackQuery, db: AsyncSession
         return
 
     elif action == "reset_all":
-        res = await reset_all_test_restrictions(db, reset_baro=True)
+        res = await reset_all_test_restrictions(db, reset_baro=True, bot=callback.bot)
         summary = (
             "💣 <b>TEST MODU: TAM SİSTEM VE DOĞRULAMA SIFIRLANDI</b>\n\n"
             f"• <b>Yasağı Kaldırılan Kullanıcı:</b> {res['banned_count']}\n"
@@ -1162,7 +1208,39 @@ async def handle_admin_action_callback(callback: CallbackQuery, db: AsyncSession
             issued_by=f"ADMIN_{callback.from_user.id}",
             db=db
         )
-        await callback.answer(f"✅ {user.full_name} ({target_uid}) hesabına +{pts} ceza puanı uygulandı!", show_alert=True)
+
+        # İlan ilişkili ise veya aktif görüşme varsa grupta duyur
+        listing_id = int(parts[4]) if len(parts) > 4 and parts[4].isdigit() else 0
+        target_gid = 0
+        if listing_id > 0:
+            l_stmt = select(Listing.group_id).where(Listing.id == listing_id)
+            target_gid = (await db.execute(l_stmt)).scalar() or 0
+        else:
+            s_stmt = select(BridgeSession).where(
+                (BridgeSession.creator_id == target_uid) | (BridgeSession.applicant_id == target_uid)
+            ).order_by(BridgeSession.id.desc()).limit(1)
+            active_s = (await db.execute(s_stmt)).scalar_one_or_none()
+            if active_s:
+                listing_id = active_s.listing_id
+                target_gid = active_s.group_id
+
+        if target_gid > 0 and listing_id > 0:
+            u_name = user.full_name or f"Meslektaşımız"
+            u_tag = f"@{user.username}" if user.username else u_name
+            grp_alert = (
+                f"🚨 <b>DİSİPLİN VE CEZA DUYURUSU</b> 🚨\n\n"
+                f"📋 <b>İlgili İlan:</b> #{listing_id}\n"
+                f"👤 <b>Kullanıcı:</b> {u_name} ({u_tag})\n"
+                f"⚖️ <b>İşlem:</b> Yönetici Denetimi Cezai Yaptırım\n"
+                f"⚠️ <b>Uygulanan Ceza:</b> <b>+{pts} Ceza Puanı</b>\n\n"
+                f"<i>Tevkil platformumuzda meslek onuruna ve kurallara uyulması zorunludur.</i>"
+            )
+            try:
+                await callback.bot.send_message(chat_id=target_gid, text=grp_alert, parse_mode="HTML")
+            except Exception as e:
+                print(f"[AdminPanel] Grupta ceza duyurusu iletilemedi: {e}")
+
+        await callback.answer(f"✅ {user.full_name} ({target_uid}) hesabına +{pts} ceza puanı uygulandı ve grupta duyuruldu!", show_alert=True)
 
     elif action == "rank":
         pts = val if val > 0 else 5
@@ -1286,7 +1364,7 @@ async def handle_admin_natural_query(message: Message, db: AsyncSession):
 
     # 0.1 Doğal Sıfırlama Sorguları (Örn: "baro sıfırla", "/baro sıfırla", "katılanları sıfırla", "üyeleri sıfırla", "doğrulamaları sıfırla")
     if re.search(r"^(?:/?baro|kat[ıi]lanlar[ıi]|üyeler[ıi]|do[gğ]rulamalar[ıi])\s+s[ıi]f[ıi]rla\b", text, re.IGNORECASE) or re.search(r"^s[ıi]f[ıi]rla\s+(?:baro|kat[ıi]lanlar[ıi]|üyeler[ıi]|do[gğ]rulamalar[ıi])\b", text, re.IGNORECASE):
-        count = await reset_baro_verifications(db)
+        count = await reset_baro_verifications(db, bot=message.bot)
         summary = (
             f"🔄 <b>TEST MODU: TÜM KATILANLAR VE BARO DOĞRULAMALARI SIFIRLANDI</b>\n\n"
             f"• <b>Sıfırlanan Doğrulama Sayısı:</b> {count} Kullanıcı\n"
@@ -1298,7 +1376,7 @@ async def handle_admin_natural_query(message: Message, db: AsyncSession):
 
     # 0.2 "kısıtları kaldır", "kısıtları sıfırla", "tüm kısıtları kaldır", "test sıfırla", "sıfırla"
     if re.search(r"^(?:k[ıi]s[ıi]tlar[ıi]\s+(?:kald[ıi]r|s[ıi]f[ıi]rla)|tüm\s+k[ıi]s[ıi]tlar[ıi]\s+kald[ıi]r|test\s+s[ıi]f[ıi]rla|s[ıi]f[ıi]rla)$", text, re.IGNORECASE):
-        res = await reset_all_test_restrictions(db, reset_baro=False)
+        res = await reset_all_test_restrictions(db, reset_baro=False, bot=message.bot)
         summary = (
             "🧹 <b>TEST MODU: KISITLAR VE BANLAR SIFIRLANDI</b>\n\n"
             f"• <b>Yasağı Kaldırılan Kullanıcı:</b> {res['banned_count']}\n"

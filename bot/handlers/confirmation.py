@@ -46,15 +46,16 @@ def get_next_candidate_keyboard(listing_id: int, current_rank: int) -> InlineKey
     return InlineKeyboardMarkup(inline_keyboard=kb)
 
 
-def get_disagreement_admin_keyboard(creator_id: int, applicant_id: int) -> InlineKeyboardMarkup:
+def get_disagreement_admin_keyboard(creator_id: int, applicant_id: int, listing_id: int = 0) -> InlineKeyboardMarkup:
+    lid_suffix = f":{listing_id}" if listing_id else ""
     buttons = [
         [
-            InlineKeyboardButton(text="⛔ Adayı Uzaklaştır (5G)", callback_data=f"adm_act:ban:{applicant_id}:5"),
-            InlineKeyboardButton(text="⛔ İlan Sahibini Uzaklaştır (5G)", callback_data=f"adm_act:ban:{creator_id}:5")
+            InlineKeyboardButton(text="⛔ Adayı Uzaklaştır (5G)", callback_data=f"adm_act:ban:{applicant_id}:5{lid_suffix}"),
+            InlineKeyboardButton(text="⛔ İlan Sahibini Uzaklaştır (5G)", callback_data=f"adm_act:ban:{creator_id}:5{lid_suffix}")
         ],
         [
-            InlineKeyboardButton(text="⚠️ Adaya +10 Ceza", callback_data=f"adm_act:penalty:{applicant_id}:10"),
-            InlineKeyboardButton(text="⚠️ İlan Sahibine +10 Ceza", callback_data=f"adm_act:penalty:{creator_id}:10")
+            InlineKeyboardButton(text="⚠️ Adaya +10 Ceza", callback_data=f"adm_act:penalty:{applicant_id}:10{lid_suffix}"),
+            InlineKeyboardButton(text="⚠️ İlan Sahibine +10 Ceza", callback_data=f"adm_act:penalty:{creator_id}:10{lid_suffix}")
         ]
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -211,7 +212,8 @@ async def execute_agree_step(
                 f"👤 <b>Seçilen Aday ID:</b> <code>{session.applicant_id}</code>\n"
                 f"⭐ <b>Kazanılan Puan:</b> Her iki tarafa +{RankService.POINTS_PER_SUCCESSFUL_TEVKIL} Puan\n"
                 f"⏰ <b>Bitiş Zamanı:</b> {now.strftime('%d.%m.%Y %H:%M')}"
-            )
+            ),
+            listing_id=listing_id
         )
 
     else:
@@ -546,6 +548,28 @@ async def handle_reason_selected(callback: CallbackQuery, db: AsyncSession):
         except Exception as e:
             print(f"[Confirmation] Tarife uzaklaştırma bildirimi iletilemedi: {e}")
 
+        # Grupta Ceza ve Disiplin Duyurusu Yap
+        target_group_id = session.group_id
+        if not target_group_id:
+            l_stmt = select(Listing.group_id).where(Listing.id == listing_id)
+            target_group_id = (await db.execute(l_stmt)).scalar()
+
+        if target_group_id:
+            violator_name = violator.full_name or f"{violator_title} Meslektaşımız"
+            violator_mention = f"@{violator.username}" if violator.username else violator_name
+            grp_alert = (
+                f"🚨 <b>DİSİPLİN VE CEZA DUYURUSU</b> 🚨\n\n"
+                f"📋 <b>İlgili İlan:</b> #{listing_id}\n"
+                f"👤 <b>Uygulanan Kişi:</b> {violator_title} ({violator_mention})\n"
+                f"⚖️ <b>Gerekçe:</b> <b>Tarife Altı Ücret Teklifi / Kural İhlali</b>\n"
+                f"⚠️ <b>Uygulanan Ceza:</b> <b>+30 Ceza Puanı</b> ve <b>{ban_days} Gün Sistemden Uzaklaştırma</b>\n\n"
+                f"<i>Tevkil platformumuzda meslek onuruna ve baro asgari ücret tarifelerine uyulması zorunludur. Denetimler aralıksız sürdürülmektedir.</i>"
+            )
+            try:
+                await callback.bot.send_message(chat_id=target_group_id, text=grp_alert, parse_mode="HTML")
+            except Exception as e:
+                print(f"[Confirmation] Grupta tarife ceza duyurusu hatası: {e}")
+
         # Bildiren tarafa onay
         await callback.message.edit_text(
             f"🚨 <b>Tarife İhlali Kaydedildi ve Yaptırım Uygulandı</b>\n\n"
@@ -573,7 +597,7 @@ async def handle_reason_selected(callback: CallbackQuery, db: AsyncSession):
             f"⏰ <b>Bitiş Tarihi:</b> {format_date_short_tr(ban_until)}\n\n"
             f"<i>Yöneticilerimiz sohbet arşivini yukarıdaki loglardan denetleyebilir.</i>"
         )
-        await AuditService.notify_admin_event(callback.bot, admin_alert)
+        await AuditService.notify_admin_event(callback.bot, admin_alert, listing_id=listing_id)
 
     else:
         await db.commit()
@@ -620,7 +644,8 @@ async def handle_reason_selected(callback: CallbackQuery, db: AsyncSession):
         await AuditService.notify_admin_event(
             callback.bot,
             admin_alert,
-            reply_markup=get_disagreement_admin_keyboard(session.creator_id, session.applicant_id)
+            reply_markup=get_disagreement_admin_keyboard(session.creator_id, session.applicant_id, listing_id=listing_id),
+            listing_id=listing_id
         )
 
     # İlanı veritabanından çek ve sıradaki yedek adaya geç

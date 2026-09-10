@@ -227,6 +227,12 @@ async def detect_tevkil_post(message: Message, db: AsyncSession):
         pass
 
     # 6. Admin Denetim Grubuna bilgilendirme geç
+    admin_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="📜 Mesaj Logları", callback_data=f"adm_act:view_logs:{listing.id}"),
+            InlineKeyboardButton(text="👥 Başvuru Kuyruğu", callback_data=f"adm_act:view_queue:{listing.id}")
+        ]
+    ])
     await AuditService.notify_admin_event(
         bot=message.bot,
         text=(
@@ -235,7 +241,9 @@ async def detect_tevkil_post(message: Message, db: AsyncSession):
             f"👥 <b>Grup:</b> {message.chat.title} (<code>{message.chat.id}</code>)\n"
             f"👤 <b>İlan Sahibi:</b> {sender.full_name} (@{sender.username or 'yok'}) [ID: <code>{sender.id}</code>] (⭐ {net_score} Puan)\n"
             f"📝 <b>İlan Metni:</b>\n{text[:500]}"
-        )
+        ),
+        reply_markup=admin_kb,
+        listing_id=listing.id
     )
 
 

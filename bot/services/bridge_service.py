@@ -149,12 +149,22 @@ class BridgeService:
             print(f"[BridgeService] Adaya başlatma mesajı gönderilemedi: {e}")
 
         # 3. Admin grubuna bildirim
+        bridge_admin_kb = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="📜 Mesaj Logları", callback_data=f"adm_act:view_logs:{listing_id}"),
+                InlineKeyboardButton(text="🛑 Görüşmeyi Durdur", callback_data=f"adm_act:stop_session:{listing_id}")
+            ]
+        ])
         await AuditService.notify_admin_event(
-            bot,
-            f"🔗 <b>[KÖPRÜ BAŞLATILDI — İlan #{listing_id}]</b>\n"
-            f"👤 İlan Sahibi ID: <code>{creator_id}</code>\n"
-            f"👤 {candidate_rank}. Sıra Aday ID: <code>{applicant_id}</code>\n"
-            f"⏱️ 30 dakikalık ilk mesaj süresi başladı."
+            bot=bot,
+            text=(
+                f"🔗 <b>[KÖPRÜ BAŞLATILDI — İlan #{listing_id}]</b>\n"
+                f"👤 İlan Sahibi ID: <code>{creator_id}</code>\n"
+                f"👤 {candidate_rank}. Sıra Aday ID: <code>{applicant_id}</code>\n"
+                f"⏱️ 30 dakikalık ilk mesaj süresi başladı."
+            ),
+            reply_markup=bridge_admin_kb,
+            listing_id=listing_id
         )
 
         return session

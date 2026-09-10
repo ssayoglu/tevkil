@@ -159,6 +159,14 @@ class BaroVerificationMiddleware(BaseMiddleware):
                 )
 
                 await redis_client.delete(f"grp_baro_sel:{user.id}")
+                last_warn_key = f"baro_warn:{event.chat.id}:{user.id}"
+                old_warn_id = await redis_client.get(last_warn_key)
+                if old_warn_id:
+                    try:
+                        await event.bot.delete_message(chat_id=event.chat.id, message_id=int(old_warn_id))
+                    except Exception:
+                        pass
+                await redis_client.delete(last_warn_key)
 
                 success_text = (
                     f"⏳ <b>Sayın {user_mention}, Baro Doğrulama Talebiniz Alındı!</b>\n\n"
@@ -179,20 +187,18 @@ class BaroVerificationMiddleware(BaseMiddleware):
 
                 return  # Handler zincirini kes
 
-            # 3. Baro bilgisi henüz girilmemiş -> Grupta sustur ve interaktif baro butonları sun
-            try:
-                await event.bot.restrict_chat_member(
-                    chat_id=event.chat.id,
-                    user_id=user.id,
-                    permissions=ChatPermissions(
-                        can_send_messages=False,
-                        can_send_media_messages=False,
-                        can_send_other_messages=False,
-                        can_add_web_page_previews=False
-                    )
-                )
-            except Exception:
-                pass
+            # Bilinen gruplar listesine ekle
+            from bot.services.redis_queue import RedisQueueService
+            await RedisQueueService.add_known_group(event.chat.id)
+
+            # Eski uyarı mesajı varsa sil (kirliliği önle)
+            last_warn_key = f"baro_warn:{event.chat.id}:{user.id}"
+            old_warn_id = await redis_client.get(last_warn_key)
+            if old_warn_id:
+                try:
+                    await event.bot.delete_message(chat_id=event.chat.id, message_id=int(old_warn_id))
+                except Exception:
+                    pass
 
             kb = get_group_baro_keyboard(user.id, bot_username)
 
@@ -202,19 +208,21 @@ class BaroVerificationMiddleware(BaseMiddleware):
                 f"👇 <b>Hızlı Doğrulama Adımları:</b>\n"
                 f"1️⃣ Aşağıdaki butonlardan <b>bağlı olduğunuz baroyu seçiniz</b> veya,\n"
                 f"2️⃣ Doğrudan <code>Baro Adı SicilNo</code> şeklinde yazınız (Örn: <code>Mersin 545</code> veya <code>İstanbul 12345</code>).\n\n"
-                f"<i>(Onaylandığında gruptaki yazma engeliniz otomatik kalkacaktır.)</i>"
+                f"<i>(Doğrulama mesajınız sistem tarafından otomatik algılanıp onay kuyruğuna iletilecektir.)</i>"
             )
 
             try:
-                await event.bot.send_message(
+                sent_msg = await event.bot.send_message(
                     chat_id=event.chat.id,
                     text=warn_text,
                     reply_markup=kb,
                     parse_mode="HTML"
                 )
+                if sent_msg:
+                    await redis_client.set(last_warn_key, str(sent_msg.message_id), ex=600)
             except Exception as e:
                 print(f"[BaroMiddleware] Grupta baro uyarı mesajı gönderilemedi: {e}")
 
-            return  # Handler zincirini kes, mesaj işlenmesin
+            return  # Handler zincirini kes, yetkisiz mesaj işlenmesin
 
         return await handler(event, data)

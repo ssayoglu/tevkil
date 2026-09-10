@@ -171,3 +171,44 @@ class RedisQueueService:
             await redis_client.delete(key)
             return [json.loads(x) for x in items]
         return []
+
+    @staticmethod
+    async def set_admin_listing_message_id(listing_id: int, message_id: int):
+        """
+        Admin grubundaki ana ilan mesajının ID'sini saklar (Thread/Reply gruplama için).
+        """
+        key = f"admin_msg:listing:{listing_id}"
+        await redis_client.set(key, str(message_id), ex=86400 * 30)
+
+    @staticmethod
+    async def get_admin_listing_message_id(listing_id: int) -> Optional[int]:
+        """
+        Admin grubundaki ana ilan mesajının ID'sini döner.
+        """
+        key = f"admin_msg:listing:{listing_id}"
+        val = await redis_client.get(key)
+        return int(val) if val else None
+
+    @staticmethod
+    async def add_known_group(group_id: int):
+        """
+        Grubu bilinen gruplar setine ekler.
+        """
+        await redis_client.sadd("known_groups", str(group_id))
+
+    @staticmethod
+    async def get_known_groups() -> List[int]:
+        """
+        Kayıtlı bilinen grup ID'lerini döner.
+        """
+        try:
+            members = await redis_client.smembers("known_groups")
+            res = []
+            for m in members:
+                try:
+                    res.append(int(m))
+                except ValueError:
+                    pass
+            return res
+        except Exception:
+            return []

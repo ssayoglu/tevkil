@@ -1,10 +1,11 @@
 from typing import Optional
+from datetime import datetime
 from aiogram import Bot
 from aiogram.types import Message
 from bot.config import settings
 from bot.database.models import MessageLog
 from bot.database.connection import AsyncSessionLocal
-from datetime import datetime
+from bot.services.redis_queue import RedisQueueService
 
 
 class AuditService:
@@ -21,60 +22,26 @@ class AuditService:
         message: Message
     ):
         """
-        Görüşmedeki mesajı (metin, fotoğraf, doküman/PDF) veritabanına loglar
-        ve anlık olarak Admin Denetim Grubu'na iletir.
+        Görüşmedeki mesajı (metin, fotoğraf, doküman/PDF) veritabanına eksiksiz loglar.
+        Admin grubunda kargaşa oluşmaması için her mesajı ana kanala fırlatmak yerine
+        Postgres MessageLog tablosuna kaydeder. Adminler diledikleri an '#ID log' veya
+        butonla tüm mesaj geçmişini anında görebilirler.
         """
-        uname_str = f"(@{sender_username})" if sender_username else ""
-        header = (
-            f"🛡️ <b>[DENETİM LOGU — İlan #{listing_id}]</b>\n"
-            f"👤 <b>Gönderen:</b> {sender_role} - {sender_name} {uname_str} (ID: <code>{sender_id}</code>)\n"
-            f"🎯 <b>Hedef:</b> {target_role}\n"
-            f"⏰ <b>Zaman:</b> {datetime.now().strftime('%d.%m.%Y %H:%M:%S')}\n"
-            f"────────────────────\n"
-        )
-
         content_type = "text"
         text_content = message.text or message.caption or ""
         file_id = None
         file_name = None
 
-        try:
-            # 1. Fotoğraf iletimi
-            if message.photo:
-                content_type = "photo"
-                file_id = message.photo[-1].file_id
-                caption = f"{header}\n📷 <b>Fotoğraf Açıklaması:</b>\n{text_content}" if text_content else header
-                await bot.send_photo(
-                    chat_id=settings.admin_chat_id,
-                    photo=file_id,
-                    caption=caption[:1024],
-                    parse_mode="HTML"
-                )
-
-            # 2. Doküman (PDF vs.) iletimi
-            elif message.document:
-                content_type = "document"
-                file_id = message.document.file_id
-                file_name = message.document.file_name
-                caption = f"{header}\n📄 <b>Dosya:</b> {file_name}\n<b>Açıklama:</b>\n{text_content}" if text_content else f"{header}\n📄 <b>Dosya:</b> {file_name}"
-                await bot.send_document(
-                    chat_id=settings.admin_chat_id,
-                    document=file_id,
-                    caption=caption[:1024],
-                    parse_mode="HTML"
-                )
-
-            # 3. Düz Metin iletimi
-            else:
-                admin_text = f"{header}💬 <b>Mesaj:</b>\n{text_content}"
-                await bot.send_message(
-                    chat_id=settings.admin_chat_id,
-                    text=admin_text,
-                    parse_mode="HTML"
-                )
-
-        except Exception as e:
-            print(f"[AuditService] Admin grubuna iletim hatası: {e}")
+        if message.photo:
+            content_type = "photo"
+            file_id = message.photo[-1].file_id
+        elif message.document:
+            content_type = "document"
+            file_id = message.document.file_id
+            file_name = message.document.file_name
+        elif message.voice:
+            content_type = "voice"
+            file_id = message.voice.file_id
 
         # Veritabanına kaydet
         try:
@@ -96,19 +63,46 @@ class AuditService:
             print(f"[AuditService] DB log kaydetme hatası: {db_err}")
 
     @staticmethod
-    async def notify_admin_event(bot: Bot, text: str, reply_markup=None):
+    async def notify_admin_event(
+        bot: Bot,
+        text: str,
+        reply_markup=None,
+        listing_id: Optional[int] = None
+    ) -> Optional[int]:
         """
-        Önemli sistem olaylarını (anlaşma, anlaşmazlık, kısıtlama, zaman aşımı) admin grubuna bildirir.
+        Önemli sistem olaylarını (Yeni ilan, köprü, anlaşma, anlaşmazlık, kısıtlama, zaman aşımı)
+        admin grubuna bildirir. Eğer listing_id varsa mesajları o ilanın ana bildirimine
+        Yanıt (Thread/Reply) olarak gruplar; kargaşayı önler.
         """
+        reply_to_id = None
+        if listing_id:
+            reply_to_id = await RedisQueueService.get_admin_listing_message_id(listing_id)
+
         try:
-            await bot.send_message(
+            msg = await bot.send_message(
                 chat_id=settings.admin_chat_id,
                 text=text,
                 reply_markup=reply_markup,
+                reply_to_message_id=reply_to_id,
                 parse_mode="HTML"
             )
-        except Exception as e:
-            print(f"[AuditService] Admin event bildirim hatası: {e}")
+            if listing_id and not reply_to_id and msg:
+                await RedisQueueService.set_admin_listing_message_id(listing_id, msg.message_id)
+            return msg.message_id if msg else None
+        except Exception:
+            try:
+                msg = await bot.send_message(
+                    chat_id=settings.admin_chat_id,
+                    text=text,
+                    reply_markup=reply_markup,
+                    parse_mode="HTML"
+                )
+                if listing_id and not reply_to_id and msg:
+                    await RedisQueueService.set_admin_listing_message_id(listing_id, msg.message_id)
+                return msg.message_id if msg else None
+            except Exception as e2:
+                print(f"[AuditService] Admin event bildirim hatası: {e2}")
+                return None
 
     @staticmethod
     async def cleanup_old_logs(days: int = 90) -> int:
